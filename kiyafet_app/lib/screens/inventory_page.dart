@@ -7,20 +7,21 @@ import 'package:csv/csv.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../constants/app_constants.dart';
 import '../models/product.dart';
-import '../services/storage_service.dart';
+import '../services/product_service.dart'; // Changed
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
 import 'package:uuid/uuid.dart';
+import '../services/service_locator.dart'; // Added for getIt
 import '../widgets/product_list_widget.dart';
 import '../widgets/product_filter_widget.dart';
 import '../widgets/product_form_widget.dart';
 
 class InventoryPage extends StatefulWidget {
-  final StorageService storageService;
+  // final StorageService storageService; // Removed
 
   const InventoryPage({
     Key? key,
-    required this.storageService,
+    // required this.storageService, // Removed
   }) : super(key: key);
 
   @override
@@ -28,6 +29,7 @@ class InventoryPage extends StatefulWidget {
 }
 
 class _InventoryPageState extends State<InventoryPage> {
+  late ProductService _productService; // Added
   List<Product> _products = [];
   List<Product> _filteredProducts = [];
   bool _isLoading = true;
@@ -42,13 +44,14 @@ class _InventoryPageState extends State<InventoryPage> {
   @override
   void initState() {
     super.initState();
+    _productService = getIt<ProductService>(); // Added
     _loadProducts();
   }
 
   Future<void> _loadProducts() async {
     setState(() => _isLoading = true);
     try {
-      final products = await widget.storageService.getProducts();
+      final products = await _productService.getProducts();
       
       // Tüm kategorileri çıkart
       final categories = <String>{'Tümü'};
@@ -162,59 +165,9 @@ class _InventoryPageState extends State<InventoryPage> {
     return hasStoragePermission || hasManagePermission || hasPhotosPermission;
   }
 
-  // Barkod doğrulama fonksiyonu
-  bool _isValidBarcode(String barcode) {
-    // Boş barkod geçerli
-    if (barcode.isEmpty) return true;
-    
-    // Sadece rakamlar olmalı
-    if (!RegExp(r'^\d+$').hasMatch(barcode)) return false;
-    
-    // EAN-13, EAN-8 veya UPC-A formatı kontrolü
-    if (barcode.length != 8 && barcode.length != 12 && barcode.length != 13) return false;
-    
-    // Check digit hesaplama
-    int sum = 0;
-    for (int i = 0; i < barcode.length - 1; i++) {
-      int digit = int.parse(barcode[i]);
-      if (i % 2 == 0) {
-        sum += digit;
-      } else {
-        sum += digit * 3;
-      }
-    }
-    
-    int checkDigit = (10 - (sum % 10)) % 10;
-    return checkDigit == int.parse(barcode[barcode.length - 1]);
-  }
-
-  // Barkod oluşturma fonksiyonu
-  String _generateBarcode() {
-    // EAN-13 formatında barkod oluştur (Türkiye için 868-869 ile başlar)
-    final random = Random();
-    String barcode = '868'; // Türkiye ülke kodu
-    
-    // 9 haneli rastgele sayı
-    for (int i = 0; i < 9; i++) {
-      barcode += random.nextInt(10).toString();
-    }
-    
-    // Check digit hesaplama
-    int sum = 0;
-    for (int i = 0; i < barcode.length; i++) {
-      int digit = int.parse(barcode[i]);
-      if (i % 2 == 0) {
-        sum += digit;
-      } else {
-        sum += digit * 3;
-      }
-    }
-    
-    int checkDigit = (10 - (sum % 10)) % 10;
-    barcode += checkDigit.toString();
-    
-    return barcode;
-  }
+  // Removed local _isValidBarcode and _generateBarcode methods.
+  // Barcode generation is handled by ProductService.createProductFromCSV or ProductService.addProduct.
+  // Barcode validation, if needed for user input, would require an exposed method in ProductService.
 
   Future<void> _importFromCSV() async {
     try {
@@ -264,9 +217,9 @@ class _InventoryPageState extends State<InventoryPage> {
           }
           
           if (rows.length > 1) { // Başlık satırı + en az bir veri satırı
-            // Önce veritabanını sıfırlayalım
-            await widget.storageService.resetDatabase();
-            print('Veritabanı sıfırlandı, CSV içe aktarma başlıyor...');
+            // Önce veritabanını sıfırlayalım (ürünler dahil tüm DB sıfırlanır)
+            await getIt<AccountingService>().resetDatabase();
+            print('Veritabanı sıfırlandı (AccountingService aracılığıyla). CSV içe aktarma başlıyor...');
             
             final products = <Product>[];
             
@@ -296,90 +249,21 @@ class _InventoryPageState extends State<InventoryPage> {
                     .trim();
                 }
                 
-                // Kolon indexleri başlık sırasına göre netleştirildi
-                // ['Ürün Adı', 'Marka', 'Model', 'Renk', 'Beden', 'Adet', 'Bölge', 'Adet Maliyeti', 'KDV', 'Gider Oranı', 'Son Maliyet', 'Kar Marjı', 'Tavsiye Fiyat', 'Kategori']
-                final name = row[0]?.toString()?.trim() ?? '';
-                final brand = row[1]?.toString()?.trim() ?? '';
-                final model = row[2]?.toString()?.trim() ?? '';
-                final color = row[3]?.toString()?.trim() ?? '';
-                final size = row[4]?.toString()?.trim() ?? '';
-                final quantityStr = cleanValue(row[5]);
-                final region = row[6]?.toString()?.trim() ?? '';
-                final unitCostStr = row.length > 7 ? cleanValue(row[7]) : '0';
-                final vatStr = row.length > 8 ? cleanValue(row[8]) : '0';
-                final expenseRatioStr = row.length > 9 ? cleanValue(row[9]) : '0';
-                final finalCostStr = row.length > 10 ? cleanValue(row[10]) : '0';
-                final avgProfitMarginStr = row.length > 11 ? cleanValue(row[11]) : '0';
-                final recPriceStr = row.length > 12 ? cleanValue(row[12]) : '0';
-                final category = row.length > 13 ? row[13]?.toString()?.trim() ?? '' : '';
-                
-                print('Temizlenmiş miktarı: "$quantityStr"');
-                
-                // Kritik alanları doğrula
-                if (name.isEmpty || brand.isEmpty) {
-                  print('Satır $i: Ürün adı veya markası boş, atlanıyor');
-                  continue;
-                }
-                
-                // Quantity değerini int'e çevirmeyi dene
-                int quantity = 0;
-                if (quantityStr.isNotEmpty) {
-                  try {
-                    quantity = int.parse(quantityStr);
-                  } catch (e) {
-                    print('Quantity değeri int\'e çevrilemedi: $quantityStr, varsayılan 0 kullanılıyor');
-                  }
-                }
-                
-                // Sayısal değerleri çevir
-                double unitCost = 0.0;
-                double vat = 0.0;
-                double expenseRatio = 0.0;
-                double finalCost = 0.0;
-                double avgProfitMargin = 0.0;
-                double recPrice = 0.0;
-                try { unitCost = double.parse(unitCostStr); } catch (e) { print('unitCost çevrilemedi: $unitCostStr'); }
-                try { vat = double.parse(vatStr); } catch (e) { print('vat çevrilemedi: $vatStr'); }
-                try { expenseRatio = double.parse(expenseRatioStr); } catch (e) { print('expenseRatio çevrilemedi: $expenseRatioStr'); }
-                try { finalCost = double.parse(finalCostStr); } catch (e) { print('finalCost çevrilemedi: $finalCostStr'); }
-                try { avgProfitMargin = double.parse(avgProfitMarginStr); } catch (e) { print('avgProfitMargin çevrilemedi: $avgProfitMarginStr'); }
-                try { recPrice = double.parse(recPriceStr); } catch (e) { print('recPrice çevrilemedi: $recPriceStr'); }
-
-                // Barkod oluştur
-                final barcode = _generateBarcode();
-                print('Oluşturulan barkod: $barcode');
-
-                // CSV'den gelen değerleri doğrudan kullan, hesaplama yapma
-                final product = Product(
-                  id: const Uuid().v4(),
-                  name: name,
-                  brand: brand,
-                  model: model,
-                  color: color,
-                  size: size,
-                  quantity: quantity,
-                  region: region,
-                  barcode: barcode,
-                  unitCost: unitCost,
-                  vat: vat,
-                  expenseRatio: expenseRatio,
-                  finalCost: finalCost,
-                  averageProfitMargin: avgProfitMargin,
-                  recommendedPrice: recPrice,
-                  purchasePrice: unitCost,
-                  sellingPrice: recPrice,
-                  category: category,
-                );
-                
-                print('Oluşturulan ürün: ${product.name} (${product.brand}/${product.model}) - ${product.quantity} adet - ${product.finalCost} TL');
+                // Convert dynamic list to List<String> for createProductFromCSV
+                final rowAsStringList = row.map((dynamic item) => item.toString()).toList();
+                final product = _productService.createProductFromCSV(rowAsStringList);
                 products.add(product);
+                print('CSV Satırından oluşturulan ürün: ${product.name}, Barkod: ${product.barcode}');
               } catch (e) {
-                print('CSV satır $i işleme hatası: $e');
+                print('CSV satır $i işleme hatası: $e. Satır verisi: $row');
+                // Optionally, show an error to the user for this specific row, or collect errors.
               }
             }
             
             if (products.isNotEmpty) {
-              await widget.storageService.saveProducts(products);
+              // Assuming ProductService.saveProducts handles existing products appropriately (e.g., updates or skips)
+              // or if a reset is done before this, it just saves all.
+              await _productService.saveProducts(products);
               await _loadProducts();
               _showSuccess('${products.length} ürün başarıyla içe aktarıldı');
             } else {
@@ -407,7 +291,7 @@ class _InventoryPageState extends State<InventoryPage> {
         return;
       }
       
-      final products = await widget.storageService.getProducts();
+      final products = await _productService.getProducts(); // Changed
       
       if (products.isEmpty) {
         _showError('Dışa aktarılacak ürün bulunamadı');
@@ -484,18 +368,21 @@ class _InventoryPageState extends State<InventoryPage> {
           onSubmit: (updatedProduct) async {
             try {
               if (product == null) {
-                await widget.storageService.addProduct(updatedProduct);
+                // Potentially use _productService._generateBarcode internally if product.barcode is empty
+                // Or ensure ProductFormWidget calls a service method to generate it before submitting.
+                // For now, assuming updatedProduct comes with a barcode if needed.
+                await _productService.addProduct(updatedProduct); // Changed
                 _showSuccess('Ürün başarıyla eklendi');
               } else {
-                await widget.storageService.updateProduct(updatedProduct);
+                await _productService.updateProduct(updatedProduct); // Changed
                 _showSuccess('Ürün başarıyla güncellendi');
               }
               _loadProducts();
             } catch (e) {
               _showError('Ürün kaydedilirken bir hata oluştu: $e');
             }
-                          },
-                        ),
+          },
+        ),
                       ),
     );
   }
@@ -514,7 +401,7 @@ class _InventoryPageState extends State<InventoryPage> {
           TextButton(
             onPressed: () async {
               try {
-                await widget.storageService.deleteProduct(product.id);
+                await _productService.deleteProduct(product.id); // Changed
                 _showSuccess('Ürün başarıyla silindi');
                 _loadProducts();
                 Navigator.pop(context);

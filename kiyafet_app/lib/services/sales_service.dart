@@ -305,4 +305,36 @@ class SalesService {
   Future<String> getNextDailySaleId() async {
     return const Uuid().v4();
   }
-} 
+
+  // Method moved from StorageService
+  Future<void> addSales(List<Map<String, dynamic>> sales) async {
+    final db = await _dbHelper.database;
+    if (db == null) return; // Should not happen on non-web if dbHelper is correctly initialized
+
+    final batch = db.batch();
+    for (final sale in sales) {
+      // Sadece sales tablosunda olan alanları bırak
+      final allowedKeys = [
+        'id', 'productId', 'productName', 'brand', 'model', 'color', 'size', 'quantity', 'price', 'date', 'time', 'timestamp', 'barcode', 'unitCost', 'vat', 'expenseRatio', 'averageProfitMargin', 'recommendedPrice', 'purchasePrice', 'finalCost', 'category', 'type'
+      ];
+      final filteredSale = <String, dynamic>{};
+      for (final key in allowedKeys) {
+        if (sale.containsKey(key)) {
+          filteredSale[key] = sale[key];
+        }
+      }
+      // id dışarıdan geliyorsa onu kullan, yoksa yeni id ata
+      filteredSale['id'] = sale['id'] ?? const Uuid().v4();
+      batch.insert('sales', filteredSale);
+    }
+    try {
+      await batch.commit(noResult: true); // Use noResult: true for efficiency if results aren't needed
+      _salesCache = null; // Invalidate cache
+      _lastCacheUpdate = null;
+      print('SALES_SERVICE_INFO: Batch sales added successfully.');
+    } catch (e) {
+      print('SALES_SERVICE_ERROR: addSales batch.commit hatası: $e');
+      rethrow;
+    }
+  }
+}

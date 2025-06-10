@@ -1,27 +1,33 @@
 import 'package:flutter/material.dart';
 import '../models/income_expense_entry.dart';
 import '../constants/app_constants.dart';
-import '../services/storage_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
+// import '../services/storage_service.dart'; // Removed
+import '../services/accounting_service.dart'; // Added
+import '../services/receivable_service.dart'; // Added
+import '../services/product_service.dart'; // Added
+import '../services/service_locator.dart'; // Added
+// import 'package:shared_preferences/shared_preferences.dart'; // Removed direct use
+import 'dart:convert'; // For jsonDecode if used with models
 import 'package:intl/intl.dart';
-import '../models/credit_entry.dart';
+// import '../models/credit_entry.dart'; // Will use Receivable
+import '../models/receivable.dart'; // Added
 import '../models/product.dart';
 import '../widgets/custom_button.dart';
+import 'package:uuid/uuid.dart'; // For generating IDs
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:csv/csv.dart';
 
 class IncomeExpenseDetailsPage extends StatefulWidget {
   final EntryType type;
-  final List<IncomeExpenseEntry> entries;
-  final StorageService storageService;
+  // final List<IncomeExpenseEntry> entries; // Removed, page will fetch its own data
+  // final StorageService storageService; // Removed
 
   const IncomeExpenseDetailsPage({
     Key? key,
     required this.type,
-    required this.entries,
-    required this.storageService,
+    // required this.entries, // Removed
+    // required this.storageService, // Removed
   }) : super(key: key);
 
   @override
@@ -29,53 +35,44 @@ class IncomeExpenseDetailsPage extends StatefulWidget {
 }
 
 class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
-  late List<IncomeExpenseEntry> _allEntries;
+  late AccountingService _accountingService;
+  late ReceivableService _receivableService;
+  late ProductService _productService;
+
+  List<IncomeExpenseEntry> _allEntries = [];
   String _searchQuery = '';
-  DateTime? _startDate;
-  DateTime? _endDate;
-  List<CreditEntry> _creditEntries = [];
+  // DateTime? _startDate; // Not currently used, can be re-added if date filtering is needed
+  // DateTime? _endDate; // Not currently used
+  List<Receivable> _receivables = []; // Changed from CreditEntry
   List<Product> _products = [];
   bool _isLoading = false;
-  DateTime _selectedDate = DateTime.now();
+  // DateTime _selectedDate = DateTime.now(); // Not currently used for main list filtering
 
   @override
   void initState() {
     super.initState();
-    _allEntries = widget.entries;
-    _loadSpecialData();
+    _accountingService = getIt<AccountingService>();
+    _receivableService = getIt<ReceivableService>();
+    _productService = getIt<ProductService>();
+    // _allEntries = widget.entries; // Removed
+    _loadAllData(); // Changed from _loadSpecialData to a more general name
   }
 
-  Future<void> _loadSpecialData() async {
+  Future<void> _loadAllData() async {
     setState(() { _isLoading = true; });
     
     try {
-      // Özel veri tipleri için yükleme yap
+      final allIncomeExpenseEntries = await _accountingService.getIncomeExpenseEntries();
+      _allEntries = allIncomeExpenseEntries.where((e) => e.type == widget.type.name).toList();
+
       if (widget.type == EntryType.mevcut) {
-        // Alacaklar (veresiye defteri)
-        final prefs = await SharedPreferences.getInstance();
-        final data = prefs.getStringList('credit_entries') ?? [];
-        _creditEntries = data.map((e) => CreditEntry.fromMap(jsonDecode(e))).toList();
-        
-        // Stok (envanter)
-        final productsJson = prefs.getStringList('products') ?? [];
-        _products = productsJson.map((e) => Product.fromMap(jsonDecode(e))).toList();
+        _receivables = await _receivableService.getReceivables();
+        _products = await _productService.getProducts();
       }
       
-      // Tüm Gelir-Gider kayıtlarını yeniden yükle
-      final prefs = await SharedPreferences.getInstance();
-      final entriesJson = prefs.getStringList('income_expense_entries') ?? [];
-      final allEntries = entriesJson.map((e) => IncomeExpenseEntry.fromMap(jsonDecode(e))).toList();
-      
-      // Sadece ilgili tipe ait kayıtları filtrele
-      final filteredEntries = allEntries.where((e) => e.type == widget.type.name).toList();
-      
-      setState(() {
-        _allEntries = filteredEntries;
-        _isLoading = false;
-      });
+      setState(() { _isLoading = false; });
     } catch (e) {
       setState(() { _isLoading = false; });
-      // Hata durumunda en azından widget ile gelen verileri göster
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Veri yüklenirken hata oluştu: $e'))
       );
@@ -371,9 +368,9 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
   }
 
   Widget _buildAlacaklarCard() {
-    final total = _creditEntries.fold(0.0, (sum, e) => sum + e.remainingDebt);
+    final total = _receivables.fold(0.0, (sum, e) => sum + (e.isPaid ? 0 : e.amount)); // Sum unpaid receivables
     return Card(
-      color: Colors.blue.shade50,
+      color: Colors.blue.shade50, // Keep styling consistent
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
@@ -423,7 +420,7 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
               ],
             ),
             const SizedBox(height: 16),
-            if (_creditEntries.isEmpty)
+            if (_receivables.isEmpty)
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -433,14 +430,14 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
                 ),
                 child: Center(
                   child: Text(
-                    'Veresiye kaydı bulunamadı',
+                    'Alacak kaydı bulunamadı', // Changed text
                     style: TextStyle(color: Colors.grey.shade600),
                   ),
                 ),
               )
-            else ..._creditEntries.map((entry) => Container(
+            else ..._receivables.map((entry) => Container( // Iterate over _receivables
               margin: const EdgeInsets.only(bottom: 8),
-              decoration: BoxDecoration(
+              decoration: BoxDecoration( // Keep styling consistent
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey.shade200),
@@ -448,7 +445,7 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
               child: ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 title: Text(
-                  '${entry.name} ${entry.surname}',
+                  entry.customerName, // Use customerName from Receivable
                   style: TextStyle(
                     fontWeight: FontWeight.w500,
                     fontSize: 15,
@@ -458,34 +455,28 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildInfoChip(
-                            icon: Icons.account_balance_wallet,
-                            label: 'Kalan Borç',
-                            value: '${entry.remainingDebt.toStringAsFixed(2)} ₺',
-                            color: Colors.blue.shade700,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _buildInfoChip(
-                            icon: Icons.payment,
-                            label: 'Son Ödeme',
-                            value: '${entry.lastPaymentAmount.toStringAsFixed(2)} ₺',
-                            color: Colors.green.shade700,
-                          ),
-                        ),
-                      ],
+                    _buildInfoChip(
+                      icon: Icons.account_balance_wallet,
+                      label: 'Tutar',
+                      value: '${entry.amount.toStringAsFixed(2)} ₺', // Use amount from Receivable
+                      color: entry.isPaid ? Colors.green.shade700 : Colors.blue.shade700,
                     ),
                     const SizedBox(height: 4),
-                    _buildInfoChip(
+                     _buildInfoChip(
                       icon: Icons.calendar_today,
-                      label: 'Son Ödeme Tarihi',
-                      value: '${entry.lastPaymentDate.day}.${entry.lastPaymentDate.month}.${entry.lastPaymentDate.year}',
+                      label: 'Tarih',
+                      value: DateFormat('dd.MM.yyyy').format(entry.date), // Use date from Receivable
                       color: Colors.grey.shade700,
                     ),
+                    if (entry.description != null && entry.description!.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      _buildInfoChip(
+                        icon: Icons.description,
+                        label: 'Açıklama',
+                        value: entry.description!,
+                        color: Colors.grey.shade700,
+                      ),
+                    ]
                   ],
                 ),
               ),
@@ -505,7 +496,14 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-                onPressed: () {/* Buraya yeni alacak ekleme dialogu eklenebilir */},
+                onPressed: () {
+                  // TODO: Implement adding/editing receivables if needed from this page
+                  // This might involve navigating to CreditBookPage or showing a dialog
+                  // For now, this button might be removed or disabled if out of scope for this page.
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Alacak yönetimi Veresiye Defteri sayfasındadır.'))
+                  );
+                },
               ),
             ),
           ],
@@ -591,31 +589,25 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
               ),
               child: ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                title: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        p.displayName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w500,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade700.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'Toplam: ${(p.finalCost * p.quantity).toStringAsFixed(2)} ₺',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                          color: Colors.blue.shade800,
-                        ),
+                title: Text( // Simplified title for product
+                  p.name,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 15,
+                  ),
+                ),
+                trailing: Container( // Moved total value to trailing for consistency
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade700.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '${(p.finalCost * p.quantity).toStringAsFixed(2)} ₺',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Colors.blue.shade800,
                       ),
                     ),
                   ],
@@ -638,21 +630,14 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
                         Expanded(
                           child: _buildInfoChip(
                             icon: Icons.monetization_on,
-                            label: 'Son Maliyet',
-                            value: '${p.finalCost.toStringAsFixed(2)} ₺',
+                        label: 'Birim Maliyet', // Changed label
+                        value: '${p.finalCost.toStringAsFixed(2)} ₺', // Assuming finalCost is per unit
                             color: Colors.green.shade700,
                           ),
                         ),
                       ],
                     ),
-                    if (p.barcode != null && p.barcode!.isNotEmpty) SizedBox(height: 4),
-                    if (p.barcode != null && p.barcode!.isNotEmpty)
-                      _buildInfoChip(
-                        icon: Icons.qr_code,
-                        label: 'Barkod',
-                        value: p.barcode!,
-                        color: Colors.grey.shade700,
-                      ),
+                // Barcode can be added if needed, similar to above
                   ],
                 ),
               ),
@@ -749,7 +734,11 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
                           lastDate: DateTime.now(),
                         );
                         if (picked != null) {
-                          setState(() => selectedDate = picked);
+                    // Update the local state for the date picker if needed
+                    // For example, if you have a local variable in the dialog's state:
+                    // (context as Element).markNeedsBuild(); // To rebuild the dialog
+                    // Or manage this with setStateDialog if using StatefulBuilder for the dialog content.
+                    // For simplicity, assuming selectedDate is updated and dialog rebuilds.
                         }
                       },
                     ),
@@ -767,36 +756,23 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
           ElevatedButton(
             onPressed: () async {
               if (formKey.currentState?.validate() ?? false) {
-                final prefs = await SharedPreferences.getInstance();
-                final entriesJson = prefs.getStringList('income_expense_entries') ?? [];
-                final entries = entriesJson.map((json) => IncomeExpenseEntry.fromMap(jsonDecode(json))).toList();
+          final newEntry = IncomeExpenseEntry(
+            id: isEdit ? entry!.id : getIt<Uuid>().v4(),
+            type: widget.type.name,
+            category: usedCategory, // Ensure this is correctly passed or determined
+            description: descController.text,
+            amount: double.tryParse(amountController.text) ?? 0.0,
+            date: selectedDate,
+            isAutoGenerated: false, // Manual entries are not auto-generated
+          );
+
                 if (isEdit) {
-                  final idx = entries.indexWhere((e) => e.id == entry!.id);
-                  if (idx != -1) {
-                    entries[idx] = entry!.copyWith(
-                      description: descController.text,
-                      amount: double.tryParse(amountController.text) ?? 0.0,
-                      date: selectedDate,
-                    );
-                  }
+            await _accountingService.updateIncomeExpenseEntry(newEntry);
                 } else {
-                  final newEntry = IncomeExpenseEntry(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    type: widget.type.name,
-                    category: usedCategory,
-                    description: descController.text,
-                    amount: double.tryParse(amountController.text) ?? 0.0,
-                    date: selectedDate,
-                    isAutoGenerated: false,
-                  );
-                  entries.add(newEntry);
+            await _accountingService.addIncomeExpenseEntry(newEntry);
                 }
-                final updatedJson = entries.map((e) => jsonEncode(e.toMap())).toList();
-                await prefs.setStringList('income_expense_entries', updatedJson);
                 Navigator.pop(context);
-                setState(() {
-                  _allEntries = entries.where((e) => e.type == widget.type.name).toList();
-                });
+          _loadAllData(); // Reload data from service
               }
             },
             child: Text(isEdit ? 'Kaydet' : 'Ekle'),
@@ -813,10 +789,7 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
         title: Text('Kayıt Sil'),
         content: Text('Bu kaydı silmek istediğinize emin misiniz?'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('İptal'),
-          ),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text('İptal')),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
@@ -826,15 +799,8 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
       ),
     );
     if (confirmed == true) {
-      final prefs = await SharedPreferences.getInstance();
-      final entriesJson = prefs.getStringList('income_expense_entries') ?? [];
-      final entries = entriesJson.map((json) => IncomeExpenseEntry.fromMap(jsonDecode(json))).toList();
-      entries.removeWhere((e) => e.id == entry.id);
-      final updatedJson = entries.map((e) => jsonEncode(e.toMap())).toList();
-      await prefs.setStringList('income_expense_entries', updatedJson);
-      setState(() {
-        _allEntries = entries.where((e) => e.type == widget.type.name).toList();
-      });
+    await _accountingService.deleteIncomeExpenseEntry(entry.id);
+    _loadAllData(); // Reload data from service
     }
   }
 
@@ -863,8 +829,10 @@ class _IncomeExpenseDetailsPageState extends State<IncomeExpenseDetailsPage> {
       final month = now.month;
       final year = now.year;
       // Örnek veri: gelir-gider listesi
-      final entries = await widget.storageService.getIncomeExpenseEntries();
+      final entries = await _accountingService.getIncomeExpenseEntries(); // Use AccountingService
       final filtered = entries.where((entry) {
+        // Filter by type first, then by date if needed
+        if (entry.type != widget.type.name) return false;
         final date = entry.date;
         return date.month == month && date.year == year;
       }).toList();

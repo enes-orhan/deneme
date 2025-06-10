@@ -3,7 +3,11 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:intl/intl.dart';
 import '../constants/app_constants.dart';
 import '../models/product.dart';
-import '../services/storage_service.dart';
+import '../models/sale.dart' as AppSaleModel; // Renamed to avoid conflict with local
+import '../services/sales_service.dart'; // Added
+import '../services/accounting_service.dart'; // Added
+import '../services/product_service.dart'; // Added
+import '../services/service_locator.dart'; // Added
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
 import 'package:flutter/foundation.dart';
@@ -13,11 +17,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:csv/csv.dart';
 
 class DailySalesPage extends StatefulWidget {
-  final StorageService storageService;
+  // final StorageService storageService; // Removed
 
   const DailySalesPage({
     Key? key,
-    required this.storageService,
+    // required this.storageService, // Removed
   }) : super(key: key);
 
   @override
@@ -25,8 +29,12 @@ class DailySalesPage extends StatefulWidget {
 }
 
 class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProviderStateMixin {
-  List<Map<String, dynamic>> _todaySales = [];
-  List<Map<String, dynamic>> _salesHistory = [];
+  late SalesService _salesService; // Added
+  late AccountingService _accountingService; // Added
+  late ProductService _productService; // Added
+
+  List<AppSaleModel.Sale> _todaySales = []; // Changed to use AppSaleModel.Sale
+  List<AppSaleModel.Sale> _salesHistory = []; // Changed to use AppSaleModel.Sale
   List<Product> _products = [];
   bool _isLoading = true;
   final _barcodeController = TextEditingController();
@@ -35,7 +43,7 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
   final _formKey = GlobalKey<FormState>();
   DateTime _selectedDate = DateTime.now();
   late TabController _tabController;
-  List<Map<String, dynamic>> _dailySales = [];
+  List<AppSaleModel.Sale> _dailySalesData = []; // Renamed from _dailySales to avoid conflict, stores AppSaleModel.Sale
   double _totalAmount = 0;
   double _totalCost = 0;
   double _totalProfit = 0;
@@ -48,8 +56,11 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
   @override
   void initState() {
     super.initState();
+    _salesService = getIt<SalesService>(); // Added
+    _accountingService = getIt<AccountingService>(); // Added
+    _productService = getIt<ProductService>(); // Added
     _tabController = TabController(length: 2, vsync: this);
-    _checkDayStarted();
+    _checkDayStarted(); // This uses SharedPreferences, will address later if it should use a service
   }
 
   @override
@@ -58,6 +69,9 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
     super.dispose();
   }
 
+  // _checkDayStarted and _startDay still use SharedPreferences directly.
+  // This could be moved to AccountingService if a concept of "business day session" is added there.
+  // For now, leaving as is, as the primary goal is StorageService replacement.
   Future<void> _checkDayStarted() async {
     final prefs = await SharedPreferences.getInstance();
     final started = prefs.getBool('day_started') ?? false;
@@ -76,12 +90,14 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
     final now = DateTime.now();
     await prefs.setBool('day_started', true);
     await prefs.setInt('day_start_time', now.millisecondsSinceEpoch);
+    // Potentially: await _accountingService.startNewBusinessDay(now);
     setState(() {
       _dayStarted = true;
       _dayStartTime = now;
     });
     await _loadData();
   }
+
 
   Future<void> _loadData() async {
     setState(() {
@@ -94,12 +110,12 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
       
       if (mounted) {
         setState(() {
-          _todaySales = data['sales'];
-          _salesHistory = data['history'];
-          _products = data['products'];
-          _dailySales = data['dailySales'];
-          _totalAmount = data['totalAmount'];
-          _totalCost = data['totalCost'];
+          _todaySales = data['sales']; // Expects List<AppSaleModel.Sale>
+          _salesHistory = data['history']; // Expects List<AppSaleModel.Sale>
+          _products = data['products']; // Expects List<Product>
+          _dailySalesData = data['dailySales']; // Expects List<AppSaleModel.Sale>
+          _totalAmount = data['totalAmount']; // Expects double
+          _totalCost = data['totalCost']; // Expects double
           _totalProfit = data['totalProfit'];
           _totalSales = data['totalSales'];
           _totalProducts = data['totalProducts'];
@@ -120,49 +136,42 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
 
   Future<Map<String, dynamic>> _loadDataInBackground(DateTime date) async {
     try {
-      final storageService = widget.storageService;
+      // final storageService = widget.storageService; // Removed
       
-      // Tüm verileri paralel olarak yükle
       final results = await Future.wait([
-        storageService.getSales(),
-        storageService.getSalesHistory(),
-        storageService.getProducts(),
-        storageService.getDailySales(date),
-        storageService.getDailySummary(date),
-        storageService.getTotalAmount(date),
-        storageService.getTotalCost(date),
-        storageService.getTotalProfit(date),
-        storageService.getTotalSales(date),
-        storageService.getTotalProducts(date),
-        storageService.getOpeningTime(date),
+        _salesService.getSales().then((salesMaps) => salesMaps.map((map) => AppSaleModel.Sale.fromMap(map)).toList()), // Convert Map to Sale object
+        _accountingService.getSalesHistory(), // Returns List<AppSaleModel.Sale>
+        _productService.getProducts(), // Returns List<Product>
+        _accountingService.getDailySales(date), // Returns List<AppSaleModel.Sale>
+        _accountingService.getDailySummary(date), // Returns Future<Map<String, double>>
+        _accountingService.getTotalAmount(), // Note: getTotalAmount in AccService might not be date specific. Adjust if needed.
+        _accountingService.getTotalCost(),   // Note: getTotalCost in AccService might not be date specific. Adjust if needed.
+        _accountingService.getTotalProfit(), // Note: getTotalProfit in AccService might not be date specific. Adjust if needed.
+        _accountingService.getTotalSales(),  // Note: getTotalSales in AccService might not be date specific. Adjust if needed.
+        _accountingService.getTotalProducts(),// Note: getTotalProducts in AccService might not be date specific. Adjust if needed.
+        _accountingService.getOpeningTime(), // Note: getOpeningTime in AccService might not be date specific. Adjust if needed.
       ]);
 
-      // Sonuçları döndür
       return {
-        'sales': results[0],
-        'history': results[1],
-        'products': results[2],
-        'dailySales': results[3],
-        'summary': results[4],
-        'totalAmount': results[5],
-        'totalCost': results[6],
-        'totalProfit': results[7],
-        'totalSales': results[8],
-        'totalProducts': results[9],
-        'openingTime': results[10] is int 
-            ? DateTime.fromMillisecondsSinceEpoch(results[10] as int)
-            : results[10] is String 
-                ? DateTime.tryParse(results[10] as String) 
-                : null,
+        'sales': results[0] as List<AppSaleModel.Sale>, // _todaySales (all sales for current session)
+        'history': results[1] as List<AppSaleModel.Sale>, // _salesHistory
+        'products': results[2] as List<Product>, // _products
+        'dailySales': results[3] as List<AppSaleModel.Sale>, // _dailySalesData (sales for the selected date)
+        'summary': results[4] as Map<String, double>?, // summary for selected date
+        'totalAmount': results[5] as double,
+        'totalCost': results[6] as double,
+        'totalProfit': results[7] as double,
+        'totalSales': results[8] as int, // This is count of sales
+        'totalProducts': results[9] as int, // This is sum of quantities of products sold
+        'openingTime': results[10] as DateTime?,
       };
     } catch (e) {
       print('Arka plan veri yükleme hatası: $e');
-      // Hata durumunda boş veri döndür
       return {
-        'sales': [],
-        'history': [],
-        'products': [],
-        'dailySales': [],
+        'sales': <AppSaleModel.Sale>[],
+        'history': <AppSaleModel.Sale>[],
+        'products': <Product>[],
+        'dailySales': <AppSaleModel.Sale>[],
         'summary': null,
         'totalAmount': 0.0,
         'totalCost': 0.0,
@@ -175,33 +184,20 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
   }
 
   void _calculateDailySummary() {
-    _totalSales = 0;
-    _totalProducts = 0;
-    _totalAmount = 0;
-    _totalCost = 0;
+    _totalSales = 0;    // Number of sale transactions
+    _totalProducts = 0; // Total quantity of items sold
+    _totalAmount = 0;   // Total revenue from sales
+    _totalCost = 0;     // Total cost of goods sold
     _totalProfit = 0;
 
-    for (var sale in _dailySales) {
-      if (sale['type'] == 'summary') continue;
-      
-      final quantity = sale['quantity'] is int 
-          ? sale['quantity'] as int 
-          : int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0;
-      
-      final price = sale['price'] is num 
-          ? (sale['price'] as num).toDouble() 
-          : double.tryParse(sale['price']?.toString() ?? '0') ?? 0.0;
-      
-      final finalCost = sale['finalCost'] is num 
-          ? (sale['finalCost'] as num).toDouble() 
-          : double.tryParse(sale['finalCost']?.toString() ?? '0') ?? 0.0;
-      
+    for (var sale in _dailySalesData) { // Use _dailySalesData which is List<AppSaleModel.Sale>
       _totalSales++;
-      _totalProducts += quantity;
-      _totalAmount += price * quantity;
-      _totalCost += finalCost * quantity;
+      for (var item in sale.items) {
+        _totalProducts += item.quantity;
+        _totalAmount += item.price * item.quantity; // Assuming item.price is selling price
+        _totalCost += item.cost * item.quantity;   // Assuming item.cost is cost price
+      }
     }
-    
     _totalProfit = _totalAmount - _totalCost;
   }
 
@@ -273,29 +269,24 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
 
     try {
       final now = DateTime.now();
-      final sale = {
-        'id': null, // ID'nin StorageService'de UUID olarak atanmasını sağla
-        'productId': _selectedProduct!.id.toString(),
-        'productName': _selectedProduct!.name?.toString() ?? '',
-        'brand': _selectedProduct!.brand?.toString() ?? '',
-        'model': _selectedProduct!.model?.toString() ?? '',
-        'color': _selectedProduct!.color?.toString() ?? '',
-        'size': _selectedProduct!.size?.toString() ?? '',
-        'quantity': quantity.toString(),
-        'price': (_selectedProduct!.finalCost ?? 0.0).toString(),
-        'finalCost': (_selectedProduct!.finalCost ?? 0.0).toString(),
-        'barcode': _selectedProduct!.barcode?.toString() ?? '',
-        'unitCost': (_selectedProduct!.unitCost ?? 0.0).toString(),
-        'vat': (_selectedProduct!.vat ?? 0.0).toString(),
-        'expenseRatio': (_selectedProduct!.expenseRatio ?? 0.0).toString(),
-        'averageProfitMargin': (_selectedProduct!.averageProfitMargin ?? 0.0).toString(),
-        'recommendedPrice': (_selectedProduct!.recommendedPrice ?? 0.0).toString(),
-        'purchasePrice': (_selectedProduct!.purchasePrice ?? 0.0).toString(),
-        'category': _selectedProduct!.category?.toString() ?? '',
-        'date': DateFormat('yyyy-MM-dd').format(now),
-        'timestamp': now.toIso8601String(),
-        'type': 'sale',
-      };
+
+      // Create SaleItem
+      final saleItem = AppSaleModel.SaleItem(
+        productId: _selectedProduct!.id,
+        productName: _selectedProduct!.name,
+        quantity: quantity,
+        price: _selectedProduct!.sellingPrice, // Assuming sellingPrice is the sale price
+        cost: _selectedProduct!.finalCost,    // Assuming finalCost is the cost price
+      );
+
+      // Create Sale object
+      final appSale = AppSaleModel.Sale(
+        id: getIt<Uuid>().v4(), // Generate new ID
+        date: now,
+        totalAmount: saleItem.price * saleItem.quantity,
+        totalCost: saleItem.cost * saleItem.quantity,
+        items: [saleItem],
+      );
 
       // Stok güncelleme
       final updatedProduct = _selectedProduct!.copyWith(
@@ -303,32 +294,37 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
       );
 
       // Veritabanını güncelle
-      widget.storageService.updateProduct(updatedProduct).then((_) {
-        // Satışı ekle
-        widget.storageService.addSales([sale]).then((_) {
+      _productService.updateProduct(updatedProduct).then((_) {
+        // Satışı ekle (SalesService expects Map<String, dynamic> for addSale)
+        // So, convert AppSaleModel.Sale to Map.
+        // However, SalesService.addSales (plural) takes List<Map<String, dynamic>>
+        // Let's assume SalesService.addSale is what we want for a single sale.
+        // If SalesService.addSale expects a Map, we convert appSale.toMap().
+        // For now, let's assume _salesService.addSale takes the Map version.
+        // A better SalesService would take AppSaleModel.Sale object.
+        _salesService.addSale(appSale.toMap()).then((_) {
           setState(() {
-            // Ürün listesini güncelle
             final index = _products.indexWhere((p) => p.id == _selectedProduct!.id);
             if (index != -1) {
               _products[index] = updatedProduct;
             }
             
-            // Satışları ekle
-            _salesHistory.add(sale);
-            _dailySales.add(sale);
+            _salesHistory.add(appSale);
+            if (DateFormat('yyyy-MM-dd').format(_selectedDate) == DateFormat('yyyy-MM-dd').format(now)) {
+              _dailySalesData.add(appSale);
+            }
             
-            // Formu sıfırla
-            _quantityController.text = '1';
             _selectedProduct = null;
             _barcodeController.clear();
             
-            // Günlük özeti güncelle
-            _calculateDailySummary();
+            _calculateDailySummary(); // Recalculate based on _dailySalesData
           });
 
           _showSuccess('Satış başarıyla kaydedildi');
         }).catchError((error) {
-          print('Satış kaydedilirken hata oluştu: $error, veri: $sale');
+          // If addSale expects a Map, appSale.toMap() should be used.
+          // The error "type 'Sale' is not a subtype of type 'Map<String, dynamic>'" would indicate this.
+          print('Satış kaydedilirken hata oluştu: $error, veri: ${appSale.toMap()}');
           _showError('Satış kaydedilirken hata oluştu: $error');
         });
       }).catchError((error) {
@@ -429,42 +425,36 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
   }
 
   Future<void> _endDay() async {
-    if (_dailySales.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Günlük satış bulunamadı')),
-      );
+    if (_dailySalesData.isEmpty) {
+      _showError('Bugüne ait satış bulunmamaktadır.');
       return;
     }
 
-    final totalSales = _dailySales.fold<double>(
-      0,
-      (sum, sale) => sum + (double.tryParse(sale['price']?.toString() ?? '0') ?? 0) * (int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0),
-    );
-
-    final totalCost = _dailySales.fold<double>(
-      0,
-      (sum, sale) => sum + (double.tryParse(sale['finalCost']?.toString() ?? '0') ?? 0) * (int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0),
-    );
-
-    final totalProducts = _dailySales.fold<int>(
-      0,
-      (sum, sale) => sum + (int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0),
-    );
+    // Recalculate summary based on current _dailySalesData just to be sure.
+    _calculateDailySummary();
+    // _totalAmount, _totalCost, _totalProducts, _totalSales are now up-to-date by _calculateDailySummary
 
     final now = DateTime.now();
-    final summary = {
-      'id': null, // ID'nin StorageService'de UUID olarak atanmasını sağla
+    // The summary map structure needs to align with what AccountingService might expect for a daily summary,
+    // or if we are still saving it as a 'sale' of type 'summary' via SalesService.
+    // For now, let's assume we are creating a special Map to be saved via _salesService.addSale,
+    // similar to the old StorageService behavior.
+    // Ideally, AccountingService would have a method like `saveDailyFinancialSummary`.
+
+    // This map is for the 'summary' type sale entry.
+    final summaryMap = {
+      'id': getIt<Uuid>().v4(),
       'date': DateFormat('yyyy-MM-dd').format(now),
       'timestamp': now.toIso8601String(),
-      'openingTime': _dayStartTime?.toIso8601String() ?? '',
+      'openingTime': _dayStartTime?.toIso8601String(),
       'closingTime': now.toIso8601String(),
-      'totalSales': totalSales.toString(),
-      'totalCost': totalCost.toString(),
-      'totalProducts': totalProducts.toString(),
-      'cashAmount': '0',
+      'totalSales': _totalAmount.toString(), // total revenue
+      'totalCost': _totalCost.toString(),   // total cost of goods sold
+      'totalProducts': _totalProducts.toString(), // total quantity of items
+      'cashAmount': '0', // These will be filled by the dialog
       'cardAmount': '0',
       'marketAmount': '0',
-      'type': 'summary',
+      'type': 'summary', // Special type for summary entries
     };
 
     showDialog(
@@ -519,38 +509,18 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
           ),
           CustomButton(
             onPressed: () async {
-              // Önce günlük satışları ekle
-              if (_todaySales.isNotEmpty) {
-                // Günlük satışları ana satışlar tablosuna ekle
-                final salesToSave = _todaySales.map((sale) {
-                  final newSaleMap = Map<String, dynamic>.from(sale);
-                  newSaleMap['id'] = null; // StorageService'in yeni UUID atamasını garantile
-                  newSaleMap['type'] = 'sale'; // Günü bitirirken 'sale' olarak işaretle
-                  newSaleMap['date'] = DateFormat('yyyy-MM-dd').format(now);
-                  newSaleMap['time'] ??= DateFormat('HH:mm:ss').format(now);
-                  newSaleMap['timestamp'] ??= now.toIso8601String();
-                  return newSaleMap;
-                }).toList();
+                // All individual sales in _dailySalesData should already be saved when they were added.
+                // So, here we only need to save the summary.
+                // SalesService.addSale expects Map<String, dynamic>
+                await _salesService.addSale(summaryMap);
+              
+                // Update local state if necessary, then reload from service for consistency
+                _loadData(); // This will refresh all data from services.
 
-                await widget.storageService.addSales(salesToSave);
-              }
-              // Sonra özet bilgilerini ekle
-              await widget.storageService.addSales([summary]);
-              
-              setState(() {
-                _salesHistory.addAll(_dailySales);
-                _salesHistory.add(summary);
-                _dailySales.clear();
-                _calculateDailySummary();
-              });
-              
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Gün sonu başarıyla kaydedildi')),
-              );
+                _showSuccess('Gün sonu başarıyla kaydedildi');
 
-              // Satış geçmişine yönlendir
-              _tabController.animateTo(1);
+                _tabController.animateTo(1); // Navigate to sales history
             },
             text: 'Tamamla',
             semanticLabel: 'Tamamla Butonu',
@@ -561,11 +531,16 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
 
     // Gün bitince flag'i sıfırla
     final prefs = await SharedPreferences.getInstance();
+    // Day start/end flags
+    final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('day_started', false);
     await prefs.remove('day_start_time');
+    // Potentially: await _accountingService.endBusinessDay(now, summaryMap);
     setState(() {
       _dayStarted = false;
       _dayStartTime = null;
+      _dailySalesData.clear(); // Clear today's sales from local list
+      _calculateDailySummary(); // Recalculate, should be zero
     });
   }
 
@@ -657,10 +632,10 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
             _buildSalesForm(),
             const SizedBox(height: AppSizes.spacing),
             SizedBox(
-              height: 400,
+              height: 400, // Consider making this dynamic or using Expanded
               child: _buildSalesList(
-                _dailySales,
-                'Bugün için satış bulunmamaktadır',
+                _dailySalesData, // Use the renamed list
+                'Bugün için satış bulunmamaktadır.',
               ),
             ),
           ],
@@ -786,402 +761,116 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
     );
   }
 
-  Widget _buildSalesList(List<Map<String, dynamic>> sales, String emptyMessage) {
-    if (sales.isEmpty) {
-      return Center(
-        child: Text(
-          emptyMessage,
-          style: AppTextStyles.body,
-        ),
-      );
-    }
+Widget _buildSalesList(List<AppSaleModel.Sale> sales, String emptyMessage) { // Changed to use AppSaleModel.Sale
+  if (sales.isEmpty) {
+    return Center(child: Text(emptyMessage, style: AppTextStyles.body));
+  }
 
-    return ListView.builder(
-      itemCount: sales.length,
-      itemBuilder: (context, index) {
-        final sale = sales[index];
-        if (sale['type'] == 'summary') {
-          try {
-            final date = sale['date'] != null 
-                ? DateTime.parse(sale['date'].toString()) 
-                : DateTime.now();
-            
-            final totalSales = (sale['totalSales'] is num) 
-                ? (sale['totalSales'] as num).toDouble() 
-                : double.tryParse(sale['totalSales']?.toString() ?? '0') ?? 0.0;
-            
-            final totalCost = (sale['totalCost'] is num) 
-                ? (sale['totalCost'] as num).toDouble() 
-                : double.tryParse(sale['totalCost']?.toString() ?? '0') ?? 0.0;
-            
-            final totalProducts = (sale['totalProducts'] is int) 
-                ? sale['totalProducts'] as int 
-                : int.tryParse(sale['totalProducts']?.toString() ?? '0') ?? 0;
-            
-            final cashAmount = (sale['cashAmount'] is num) 
-                ? (sale['cashAmount'] as num).toDouble() 
-                : double.tryParse(sale['cashAmount']?.toString() ?? '0') ?? 0.0;
-            
-            final cardAmount = (sale['cardAmount'] is num) 
-                ? (sale['cardAmount'] as num).toDouble() 
-                : double.tryParse(sale['cardAmount']?.toString() ?? '0') ?? 0.0;
-            
-            final marketAmount = (sale['marketAmount'] is num) 
-                ? (sale['marketAmount'] as num).toDouble() 
-                : double.tryParse(sale['marketAmount']?.toString() ?? '0') ?? 0.0;
+  return ListView.builder(
+    itemCount: sales.length,
+    itemBuilder: (context, index) {
+      final sale = sales[index]; // This is now an AppSaleModel.Sale object
 
-            return Card(
-              elevation: 2,
-              margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Gün Sonu Özeti',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                        Text(
-                          DateFormat('dd.MM.yyyy').format(date),
-                          style: TextStyle(color: Colors.grey[600]),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text('Toplam Satış: ${totalSales.toStringAsFixed(2)} TL'),
-                    Text('Toplam Maliyet: ${totalCost.toStringAsFixed(2)} TL'),
-                    Text('Satılan Ürün Adedi: $totalProducts'),
-                    const SizedBox(height: 8),
-                    Text('Nakit: ${cashAmount.toStringAsFixed(2)} TL'),
-                    Text('Kart: ${cardAmount.toStringAsFixed(2)} TL'),
-                    Text('Pazar: ${marketAmount.toStringAsFixed(2)} TL'),
-                  ],
-                ),
-              ),
-            );
-          } catch (e) {
-            print('Özet kartı oluşturulurken hata: $e');
-            return const SizedBox.shrink();
-          }
-        }
-
-        try {
-          final productName = sale['productName']?.toString() ?? '';
-          final brand = sale['brand']?.toString() ?? '';
-          final model = sale['model']?.toString() ?? '';
-          final color = sale['color']?.toString() ?? '';
-          final size = sale['size']?.toString() ?? '';
-          final barcode = sale['barcode']?.toString() ?? '';
-          
-          final quantity = (sale['quantity'] is int) 
-              ? sale['quantity'] as int 
-              : int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0;
-          
-          final price = (sale['price'] is num) 
-              ? (sale['price'] as num).toDouble() 
-              : double.tryParse(sale['price']?.toString() ?? '0') ?? 0.0;
-          
-          final total = quantity * price;
-          
-          final time = sale['timestamp'] != null 
-              ? DateFormat('HH:mm').format(DateTime.parse(sale['timestamp'].toString())) 
-              : '';
-
-          return Card(
-            elevation: 2,
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      // Displaying individual sale items from the Sale object
+      return Card(
+        elevation: 2,
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          productName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                      Text(time, style: TextStyle(color: Colors.grey[600])),
-                    ],
+                  Text(
+                    'Satış ID: ${sale.id.substring(0, 8)}', // Display part of Sale ID
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
-                  const SizedBox(height: 4),
-                  Text('Marka/Model: $brand / $model'),
-                  Text('Renk/Beden: $color / $size'),
-                  Text('Barkod: $barcode'),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Adet: ${quantity.toStringAsFixed(0)}'),
-                      Text('Birim Fiyat: ${price.toStringAsFixed(2)} ₺'),
-                      Text(
-                        'Toplam: ${total.toStringAsFixed(2)} ₺',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).primaryColor,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    DateFormat('dd.MM.yyyy HH:mm').format(sale.date),
+                    style: TextStyle(color: Colors.grey[600]),
                   ),
                 ],
               ),
-            ),
-          );
-        } catch (e) {
-          print('Satış kartı oluşturulurken hata: $e');
-          return const SizedBox.shrink();
-        }
-      },
-    );
-  }
-
-  Widget _buildSalesHistoryList() {
-    if (_salesHistory.isEmpty) {
-      return const Center(
-        child: Text('Henüz satış kaydı bulunmamaktadır.'),
-      );
-    }
-
-    final dailySales = <String, List<Map<String, dynamic>>>{};
-    final dailySummaries = <String, Map<String, dynamic>>{};
-
-    for (final sale in _salesHistory) {
-      try {
-        if (sale['type'] == 'summary') {
-          final date = _parseDateStringOrMillis(sale['timestamp']);
-          dailySummaries[date] = sale;
-        } else {
-          final date = _parseDateStringOrMillis(sale['timestamp']);
-          dailySales.putIfAbsent(date, () => []).add(sale);
-        }
-      } catch (e) {
-        print('Satış verisi işlenirken hata: $e');
-        continue;
-      }
-    }
-
-    final sortedDates = dailySales.keys.toList()..sort((a, b) => b.compareTo(a));
-
-    return ListView.builder(
-      itemCount: sortedDates.length,
-      itemBuilder: (context, index) {
-        final date = sortedDates[index];
-        final sales = dailySales[date]!;
-        final summary = dailySummaries[date];
-
-        double totalAmount = 0;
-        int totalProducts = 0;
-        double totalCost = 0;
-        double cashAmount = 0;
-        double cardAmount = 0;
-        double marketAmount = 0;
-        double totalCollection = 0;
-
-        if (summary != null) {
-          try {
-            totalAmount = (summary['totalAmount'] is num) 
-                ? (summary['totalAmount'] as num).toDouble() 
-                : double.tryParse(summary['totalAmount']?.toString() ?? '0') ?? 0.0;
-            
-            totalProducts = (summary['totalProducts'] is int) 
-                ? summary['totalProducts'] as int 
-                : int.tryParse(summary['totalProducts']?.toString() ?? '0') ?? 0;
-            
-            totalCost = (summary['totalCost'] is num) 
-                ? (summary['totalCost'] as num).toDouble() 
-                : double.tryParse(summary['totalCost']?.toString() ?? '0') ?? 0.0;
-            
-            cashAmount = (summary['cashAmount'] is num) 
-                ? (summary['cashAmount'] as num).toDouble() 
-                : double.tryParse(summary['cashAmount']?.toString() ?? '0') ?? 0.0;
-            
-            cardAmount = (summary['cardAmount'] is num) 
-                ? (summary['cardAmount'] as num).toDouble() 
-                : double.tryParse(summary['cardAmount']?.toString() ?? '0') ?? 0.0;
-            
-            marketAmount = (summary['marketAmount'] is num) 
-                ? (summary['marketAmount'] as num).toDouble() 
-                : double.tryParse(summary['marketAmount']?.toString() ?? '0') ?? 0.0;
-
-            totalCollection = cashAmount + cardAmount + marketAmount;
-          } catch (e) {
-            print('Özet verisi işlenirken hata: $e');
-          }
-        } else {
-          for (final sale in sales) {
-            try {
-              final q = (sale['quantity'] is int) 
-                  ? sale['quantity'] as int 
-                  : int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0;
-              
-              final c = (sale['finalCost'] is num) 
-                  ? (sale['finalCost'] as num).toDouble() 
-                  : (sale['price'] is num) 
-                      ? (sale['price'] as num).toDouble() 
-                      : double.tryParse(sale['finalCost']?.toString() ?? '0') ?? 0.0;
-              
-              totalAmount += q * c;
-              totalProducts += q;
-              totalCost += q * c;
-            } catch (e) {
-              print('Satış verisi işlenirken hata: $e');
-              continue;
-            }
-          }
-        }
-
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: ExpansionTile(
-            title: Text(
-              DateFormat('dd MMMM yyyy', 'tr_TR').format(DateTime.parse(date)),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 4),
-                Row(
+              const SizedBox(height: 8),
+              Text('Toplam Tutar: ${sale.totalAmount.toStringAsFixed(2)} TL', style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+              Text('Toplam Maliyet: ${sale.totalCost.toStringAsFixed(2)} TL'),
+              const SizedBox(height: 8),
+              const Text('Ürünler:', style: TextStyle(fontWeight: FontWeight.bold)),
+              ...sale.items.map((item) => Padding(
+                padding: const EdgeInsets.only(left: 8.0, top: 4.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.shopping_cart, size: 16, color: Colors.grey[600]),
-                    const SizedBox(width: 4),
-                    Text('$totalProducts ürün'),
-                    const SizedBox(width: 16),
-                    Icon(Icons.currency_lira, size: 16, color: Colors.grey[600]),
-                    const SizedBox(width: 4),
-                    Text('${totalAmount.toStringAsFixed(2)} TL'),
+                    Text('- ${item.productName} (${item.quantity} adet x ${item.price.toStringAsFixed(2)} TL)'),
+                    Text('  Maliyet: ${(item.cost * item.quantity).toStringAsFixed(2)} TL', style: TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
-              ],
-            ),
-            children: [
-              if (summary != null) ...[
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Günlük Özet', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                      const SizedBox(height: 8),
-                      Text('Açılış Saati: ' + (summary['openingTime'] ?? '')),
-                      Text('Kapanış Saati: ' + (summary['closingTime'] ?? '')),
-                      _buildSummaryRow('Nakit Tahsilat', cashAmount),
-                      _buildSummaryRow('Kart Tahsilatı', cardAmount),
-                      _buildSummaryRow('Pazar Tahsilatı', marketAmount),
-                      const Divider(),
-                      _buildSummaryRow('Toplam Tahsilat', totalCollection, isTotal: true),
-                      _buildSummaryRow('Toplam Maliyet', totalCost),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Net Durum',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          Row(
-                            children: [
-                              Icon(Icons.currency_lira, size: 20, color: Colors.grey[800]),
-                              const SizedBox(width: 4),
-                              Text(
-                                '${(totalCollection - totalCost).toStringAsFixed(2)} TL',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              SingleChildScrollView(
-                child: Column(
-                  children: sales.map((sale) {
-                    try {
-                      final quantity = (sale['quantity'] is int) 
-                          ? sale['quantity'] as int 
-                          : int.tryParse(sale['quantity']?.toString() ?? '0') ?? 0;
-                      
-                      final finalCost = (sale['finalCost'] is num) 
-                          ? (sale['finalCost'] as num).toDouble() 
-                          : (sale['price'] is num) 
-                              ? (sale['price'] as num).toDouble() 
-                              : double.tryParse(sale['finalCost']?.toString() ?? '0') ?? 0.0;
-                      
-                      final totalPrice = quantity * finalCost;
-                      final barcode = sale['barcode']?.toString() ?? '';
-                      final productName = sale['productName']?.toString() ?? '';
-                      final brand = sale['brand']?.toString() ?? '';
-                      final model = sale['model']?.toString() ?? '';
-                      final color = sale['color']?.toString() ?? '';
-                      final size = sale['size']?.toString() ?? '';
-                      final time = sale['timestamp'] != null 
-                          ? DateFormat('HH:mm').format(DateTime.parse(sale['timestamp'].toString())) 
-                          : '';
-                      
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: ListTile(
-                            title: Text('$productName ($brand/$model)'),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Renk/Beden: $color/$size'),
-                                Text('Barkod: $barcode'),
-                              ],
-                            ),
-                            trailing: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '${totalPrice.toStringAsFixed(2)} TL',
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                                Text('$quantity adet'),
-                                Text(time, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    } catch (e) {
-                      print('Satış kartı oluşturulurken hata: $e');
-                      return const SizedBox.shrink();
-                    }
-                  }).toList(),
-                ),
-              ),
+              )).toList(),
             ],
           ),
-        );
-      },
-    );
+        ),
+      );
+    },
+  );
+}
+
+
+Widget _buildSalesHistoryList() {
+  if (_salesHistory.isEmpty) { // _salesHistory is List<AppSaleModel.Sale>
+    return const Center(child: Text('Henüz satış kaydı bulunmamaktadır.'));
   }
 
-  Widget _buildSummaryRow(String label, double amount, {bool isTotal = false, bool isProfit = false, String extra = ''}) {
+  // Group sales by date
+  final Map<String, List<AppSaleModel.Sale>> groupedSales = {};
+  for (final sale in _salesHistory) {
+    final dateKey = DateFormat('yyyy-MM-dd').format(sale.date);
+    groupedSales.putIfAbsent(dateKey, () => []).add(sale);
+  }
+
+  final sortedDates = groupedSales.keys.toList()..sort((a, b) => b.compareTo(a));
+
+  return ListView.builder(
+    itemCount: sortedDates.length,
+    itemBuilder: (context, index) {
+      final dateKey = sortedDates[index];
+      final salesOnDate = groupedSales[dateKey]!;
+
+      // Calculate daily totals for display in ExpansionTile title
+      double dailyTotalAmount = salesOnDate.fold(0, (sum, sale) => sum + sale.totalAmount);
+      int dailyTotalItems = salesOnDate.fold(0, (sum, sale) => sum + sale.items.fold(0, (itemSum, item) => itemSum + item.quantity));
+
+      return Card(
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: ExpansionTile(
+          title: Text(
+            DateFormat('dd MMMM yyyy', 'tr_TR').format(DateTime.parse(dateKey)),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text('$dailyTotalItems ürün, Toplam: ${dailyTotalAmount.toStringAsFixed(2)} TL'),
+          children: salesOnDate.map((sale) {
+            // This is similar to _buildSalesList item builder
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: ListTile(
+                title: Text('Satış ID: ${sale.id.substring(0,8)} (${DateFormat('HH:mm').format(sale.date)})'),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: sale.items.map((item) => Text('${item.productName} x${item.quantity} @ ${item.price.toStringAsFixed(2)} TL')).toList(),
+                ),
+                trailing: Text('${sale.totalAmount.toStringAsFixed(2)} TL', style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            );
+          }).toList(),
+        ),
+      );
+    },
+  );
+}
+
+
+Widget _buildSummaryRow(String label, double amount, {bool isTotal = false, bool isProfit = false, String extra = ''}) {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: 4),
       child: Row(

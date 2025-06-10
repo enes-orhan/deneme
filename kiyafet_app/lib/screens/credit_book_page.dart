@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/credit_entry.dart';
+// import 'package:shared_preferences/shared_preferences.dart'; // Removed
+import '../models/receivable.dart'; // Changed from credit_entry.dart
 import '../constants/app_constants.dart';
+import '../services/receivable_service.dart'; // Added
+import '../services/service_locator.dart'; // Added
 import 'package:file_picker/file_picker.dart';
+import 'package:uuid/uuid.dart'; // Added for ID generation
 import 'package:csv/csv.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -17,22 +20,26 @@ class CreditBookPage extends StatefulWidget {
 }
 
 class _CreditBookPageState extends State<CreditBookPage> {
-  List<CreditEntry> _entries = [];
-  List<CreditEntry> _filteredEntries = [];
+  late ReceivableService _receivableService; // Added
+  List<Receivable> _entries = []; // Changed from CreditEntry
+  List<Receivable> _filteredEntries = []; // Changed from CreditEntry
   String _searchQuery = '';
-  static const String _prefsKey = 'credit_entries';
+  // static const String _prefsKey = 'credit_entries'; // Removed
 
   @override
   void initState() {
     super.initState();
+    _receivableService = getIt<ReceivableService>(); // Added
     _loadEntries();
   }
 
   Future<void> _loadEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getStringList(_prefsKey) ?? [];
+    // final prefs = await SharedPreferences.getInstance(); // Removed
+    // final data = prefs.getStringList(_prefsKey) ?? []; // Removed
+    final loadedEntries = await _receivableService.getReceivables(); // Changed
     setState(() {
-      _entries = data.map((e) => CreditEntry.fromMap(jsonDecode(e))).toList();
+      // _entries = data.map((e) => Receivable.fromMap(jsonDecode(e))).toList(); // Changed model
+      _entries = loadedEntries;
       _filteredEntries = List.from(_entries);
     });
   }
@@ -49,17 +56,19 @@ class _CreditBookPageState extends State<CreditBookPage> {
     setState(() {
       _searchQuery = query;
       _filteredEntries = _entries.where((entry) {
-        final name = '${entry.name} ${entry.surname}'.toLowerCase();
+        // final name = '${entry.name} ${entry.surname}'.toLowerCase(); // Changed for Receivable model
+        final name = entry.customerName.toLowerCase();
         return name.contains(query.toLowerCase());
       }).toList();
     });
   }
 
-  Future<void> _saveEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = _entries.map((e) => jsonEncode(e.toMap())).toList();
-    await prefs.setStringList(_prefsKey, data);
-  }
+  // _saveEntries is not needed directly, service handles saving.
+  // Future<void> _saveEntries() async {
+  //   final prefs = await SharedPreferences.getInstance();
+  //   final data = _entries.map((e) => jsonEncode(e.toMap())).toList();
+  //   await prefs.setStringList(_prefsKey, data);
+  // }
 
   Future<bool> _requestPermissions() async {
     // Android 13 ve üzeri için farklı izinleri iste
@@ -162,65 +171,50 @@ class _CreditBookPageState extends State<CreditBookPage> {
               print('Satır $i: $row');
               
               try {
-                // En az gerekli alan sayısı kontrolü
-                if (row.length < 5) {
-                  print('Satır $i yeterli alana sahip değil. Beklenen: >=5, Bulunan: ${row.length}');
-                  continue; // Bu satırı atla ama diğer satırları işlemeye devam et
+                // CSV structure for Receivable: customerName, amount, date, description, isPaid
+                // Adı Soyadı (customerName), Kalan Borç (amount), Son Ödeme Tarihi (date), Açıklama (description), Ödendi mi (isPaid)
+                if (row.length < 3) { // customerName, amount, date are minimal
+                  print('Satır $i yeterli alana sahip değil. Beklenen: >=3, Bulunan: ${row.length}');
+                  continue;
                 }
                 
                 // Temizlenecek para ve tarih değerleri için yardımcı fonksiyon
                 String cleanMoneyValue(dynamic value) {
                   if (value == null) return '0';
-                  String strValue = value.toString().trim();
-                  return strValue
-                    .replaceAll('TL', '')
-                    .replaceAll('₺', '')
-                    .replaceAll(',', '.') // Türkçe formatını destekle
-                    .replaceAll(' ', '')
-                    .trim();
+                  return value.toString().trim().replaceAll('TL', '').replaceAll('₺', '').replaceAll(',', '.').replaceAll(' ', '');
                 }
+
+                final customerName = row[0]?.toString().trim() ?? '';
+                final amountStr = cleanMoneyValue(row[1]);
+                final dateStr = row[2]?.toString().trim() ?? '';
+                final description = row.length > 3 ? row[3]?.toString().trim() : null;
+                final isPaidStr = row.length > 4 ? row[4]?.toString().trim().toLowerCase() : 'false';
                 
-                // Değerleri al ve temizle
-                final name = row[0]?.toString()?.trim() ?? '';
-                final surname = row[1]?.toString()?.trim() ?? '';
-                final remainingDebtStr = cleanMoneyValue(row[2]);
-                final lastPaymentAmountStr = cleanMoneyValue(row[3]);
-                final lastPaymentDateStr = row[4]?.toString()?.trim() ?? '';
-                
-                // Kritik alanların boş olup olmadığını kontrol et
-                if (name.isEmpty) {
-                  print('Satır $i: İsim boş, atlanıyor');
+                if (customerName.isEmpty) {
+                  print('Satır $i: Müşteri adı boş, atlanıyor');
                   continue;
                 }
                 
-                // Sayısal değerleri dönüştür
-                double remainingDebt = 0.0;
-                double lastPaymentAmount = 0.0;
-                
+                double amount = 0.0;
                 try {
-                  remainingDebt = double.parse(remainingDebtStr);
+                  amount = double.parse(amountStr);
                 } catch (e) {
-                  print('Kalan borç değeri dönüştürülemedi: $remainingDebtStr, varsayılan 0 kullanılıyor');
+                  print('Tutar değeri dönüştürülemedi: $amountStr, varsayılan 0 kullanılıyor');
                 }
                 
-                try {
-                  lastPaymentAmount = double.parse(lastPaymentAmountStr);
-                } catch (e) {
-                  print('Son ödeme miktarı dönüştürülemedi: $lastPaymentAmountStr, varsayılan 0 kullanılıyor');
-                }
+                DateTime date = _parseDate(dateStr);
+                bool isPaid = isPaidStr == 'true' || isPaidStr == 'evet';
                 
-                // Tarihi işle
-                DateTime lastPaymentDate = _parseDate(lastPaymentDateStr);
-                
-                final entry = CreditEntry(
-                  name: name,
-                  surname: surname,
-                  remainingDebt: remainingDebt,
-                  lastPaymentAmount: lastPaymentAmount,
-                  lastPaymentDate: lastPaymentDate,
+                final entry = Receivable(
+                  id: const Uuid().v4(), // Generate new ID for imported items
+                  customerName: customerName,
+                  amount: amount,
+                  date: date,
+                  description: description,
+                  isPaid: isPaid,
                 );
                 
-                print('Oluşturulan kayıt: ${entry.name} ${entry.surname} - Borç: ${entry.remainingDebt} TL');
+                print('Oluşturulan kayıt: ${entry.customerName} - Tutar: ${entry.amount} TL');
                 newEntries.add(entry);
               } catch (e) {
                 print('CSV satırı işlenemedi: $e');
@@ -228,11 +222,10 @@ class _CreditBookPageState extends State<CreditBookPage> {
             }
             
             if (newEntries.isNotEmpty) {
-              setState(() {
-                _entries.addAll(newEntries);
-                _filteredEntries = List.from(_entries);
-              });
-              await _saveEntries();
+              for (var entry in newEntries) {
+                await _receivableService.addReceivable(entry);
+              }
+              _loadEntries(); // Reload all entries from service
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('${newEntries.length} veresiye kaydı içe aktarıldı')),
               );
@@ -278,14 +271,15 @@ class _CreditBookPageState extends State<CreditBookPage> {
         return;
       }
 
+      // CSV structure for Receivable: customerName, amount, date, description, isPaid
       final csvData = [
-        ['Adı', 'Soyadı', 'Kalan Borç (TL)', 'Son Ödeme Miktarı (TL)', 'Son Ödeme Tarihi'],
+        ['Müşteri Adı', 'Tutar (TL)', 'Tarih', 'Açıklama', 'Ödendi mi?'],
         ..._entries.map((e) => [
-          e.name,
-          e.surname,
-          e.remainingDebt.toString(),
-          e.lastPaymentAmount.toString(),
-          '${e.lastPaymentDate.day}.${e.lastPaymentDate.month}.${e.lastPaymentDate.year}',
+          e.customerName,
+          e.amount.toStringAsFixed(2),
+          '${e.date.day}.${e.date.month}.${e.date.year}',
+          e.description ?? '',
+          e.isPaid ? 'Evet' : 'Hayır',
         ]),
       ];
 
@@ -329,19 +323,19 @@ class _CreditBookPageState extends State<CreditBookPage> {
     }
   }
 
-  Future<void> _showAddOrEditEntryDialog({CreditEntry? entry, int? index}) async {
-    final nameController = TextEditingController(text: entry?.name ?? '');
-    final surnameController = TextEditingController(text: entry?.surname ?? '');
-    final remainingDebtController = TextEditingController(text: entry?.remainingDebt.toString() ?? '');
-    final lastPaymentAmountController = TextEditingController(text: entry?.lastPaymentAmount.toString() ?? '');
-    DateTime? selectedDate = entry?.lastPaymentDate;
+  Future<void> _showAddOrEditEntryDialog({Receivable? entry}) async { // Changed CreditEntry to Receivable
+    final customerNameController = TextEditingController(text: entry?.customerName ?? '');
+    final amountController = TextEditingController(text: entry?.amount.toString() ?? '');
+    final descriptionController = TextEditingController(text: entry?.description ?? '');
+    DateTime? selectedDate = entry?.date ?? DateTime.now();
+    bool isPaid = entry?.isPaid ?? false;
     final formKey = GlobalKey<FormState>();
 
     await showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setStateDialog) => AlertDialog(
-          title: Text(entry == null ? 'Yeni Veresiye Kaydı' : 'Veresiye Kaydını Düzenle'),
+          title: Text(entry == null ? 'Yeni Alacak Kaydı' : 'Alacak Kaydını Düzenle'),
           content: SingleChildScrollView(
             child: Form(
               key: formKey,
@@ -349,34 +343,27 @@ class _CreditBookPageState extends State<CreditBookPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextFormField(
-                    controller: nameController,
-                    decoration: const InputDecoration(labelText: 'Adı'),
+                    controller: customerNameController,
+                    decoration: const InputDecoration(labelText: 'Müşteri Adı Soyadı'),
                     validator: (v) => v == null || v.isEmpty ? 'Zorunlu' : null,
                   ),
                   TextFormField(
-                    controller: surnameController,
-                    decoration: const InputDecoration(labelText: 'Soyadı'),
-                    validator: (v) => v == null || v.isEmpty ? 'Zorunlu' : null,
-                  ),
-                  TextFormField(
-                    controller: remainingDebtController,
-                    decoration: const InputDecoration(labelText: 'Kalan Borç Miktarı (TL)'),
+                    controller: amountController,
+                    decoration: const InputDecoration(labelText: 'Tutar (TL)'),
                     keyboardType: TextInputType.number,
                     validator: (v) => v == null || v.isEmpty ? 'Zorunlu' : null,
                   ),
                   TextFormField(
-                    controller: lastPaymentAmountController,
-                    decoration: const InputDecoration(labelText: 'Son Ödeme Miktarı (TL)'),
-                    keyboardType: TextInputType.number,
-                    validator: (v) => v == null || v.isEmpty ? 'Zorunlu' : null,
+                    controller: descriptionController,
+                    decoration: const InputDecoration(labelText: 'Açıklama (Opsiyonel)'),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
                         child: Text(selectedDate == null
-                            ? 'Son Ödeme Tarihi seçilmedi'
-                            : 'Son Ödeme Tarihi: \n${selectedDate!.day}.${selectedDate!.month}.${selectedDate!.year}'),
+                            ? 'Tarih seçilmedi'
+                            : 'Tarih: ${selectedDate!.day}.${selectedDate!.month}.${selectedDate!.year}'),
                       ),
                       IconButton(
                         icon: const Icon(Icons.calendar_today),
@@ -396,6 +383,15 @@ class _CreditBookPageState extends State<CreditBookPage> {
                       ),
                     ],
                   ),
+                  SwitchListTile(
+                    title: const Text('Ödendi mi?'),
+                    value: isPaid,
+                    onChanged: (bool value) {
+                      setStateDialog(() {
+                        isPaid = value;
+                      });
+                    },
+                  ),
                 ],
               ),
             ),
@@ -408,22 +404,21 @@ class _CreditBookPageState extends State<CreditBookPage> {
             ElevatedButton(
               onPressed: () async {
                 if (formKey.currentState?.validate() ?? false && selectedDate != null) {
-                  final newEntry = CreditEntry(
-                    name: nameController.text,
-                    surname: surnameController.text,
-                    remainingDebt: double.tryParse(remainingDebtController.text) ?? 0.0,
-                    lastPaymentAmount: double.tryParse(lastPaymentAmountController.text) ?? 0.0,
-                    lastPaymentDate: selectedDate!,
+                  final newReceivable = Receivable(
+                    id: entry?.id ?? const Uuid().v4(), // Use existing ID or generate new
+                    customerName: customerNameController.text,
+                    amount: double.tryParse(amountController.text) ?? 0.0,
+                    date: selectedDate!,
+                    description: descriptionController.text.isEmpty ? null : descriptionController.text,
+                    isPaid: isPaid,
                   );
-                  setState(() {
-                    if (entry == null) {
-                      _entries.add(newEntry);
-                    } else if (index != null) {
-                      _entries[index] = newEntry;
-                    }
-                    _filteredEntries = List.from(_entries);
-                  });
-                  await _saveEntries();
+
+                  if (entry == null) {
+                    await _receivableService.addReceivable(newReceivable);
+                  } else {
+                    await _receivableService.updateReceivable(newReceivable);
+                  }
+                  _loadEntries(); // Reload entries from service
                   Navigator.pop(context);
                 }
               },
@@ -495,44 +490,54 @@ class _CreditBookPageState extends State<CreditBookPage> {
                         elevation: 1,
                         child: ListTile(
                           contentPadding: const EdgeInsets.all(16),
-                          title: Row(
-                            children: [
-                              Text(
-                                '${entry.name} ${entry.surname}',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              if (_searchQuery.isNotEmpty)
-                                Container(
-                                  margin: const EdgeInsets.only(left: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue.shade100,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    'Eşleşme',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.blue.shade800,
-                                    ),
-                                  ),
-                                ),
-                            ],
+                          title: Text(
+                            entry.customerName,
+                            style: TextStyle(fontWeight: FontWeight.bold, color: entry.isPaid ? Colors.green : Colors.red),
                           ),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               SizedBox(height: 4),
-                              _buildInfoRow('Kalan Borç', '${entry.remainingDebt.toStringAsFixed(2)} ₺', Colors.red),
-                              _buildInfoRow('Son Ödeme', '${entry.lastPaymentAmount.toStringAsFixed(2)} ₺', Colors.green),
+                              _buildInfoRow('Tutar', '${entry.amount.toStringAsFixed(2)} ₺', entry.isPaid ? Colors.green : Colors.red),
                               _buildInfoRow(
-                                'Son Ödeme Tarihi',
-                                '${entry.lastPaymentDate.day}.${entry.lastPaymentDate.month}.${entry.lastPaymentDate.year}',
-                                Colors.blue,
+                                'Tarih',
+                                '${entry.date.day}.${entry.date.month}.${entry.date.year}',
+                                Colors.blueGrey,
                               ),
+                              if (entry.description != null && entry.description!.isNotEmpty)
+                                _buildInfoRow('Açıklama', entry.description!, Colors.black54),
                             ],
                           ),
-                          onTap: () => _showAddOrEditEntryDialog(entry: entry, index: _entries.indexOf(entry)),
+                          trailing: IconButton(
+                            icon: Icon(Icons.delete, color: Colors.grey.shade600),
+                            onPressed: () async {
+                              // Confirmation dialog before deleting
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (BuildContext context) {
+                                  return AlertDialog(
+                                    title: const Text('Alacağı Sil'),
+                                    content: Text('${entry.customerName} adlı müşterinin alacağını silmek istediğinizden emin misiniz?'),
+                                    actions: <Widget>[
+                                      TextButton(
+                                        onPressed: () => Navigator.of(context).pop(false),
+                                        child: const Text('İptal'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => Navigator.of(context).pop(true),
+                                        child: const Text('Sil'),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              );
+                              if (confirm == true) {
+                                await _receivableService.deleteReceivable(entry.id);
+                                _loadEntries();
+                              }
+                            },
+                          ),
+                          onTap: () => _showAddOrEditEntryDialog(entry: entry),
                         ),
                       );
                     },

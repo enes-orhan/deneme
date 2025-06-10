@@ -19,7 +19,7 @@ class HomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     // Provider'dan servisleri al
     final authService = Provider.of<AuthService>(context);
-    final storageService = Provider.of<StorageService>(context);
+    // final storageService = Provider.of<StorageService>(context); // Removed
     final currentUser = authService.currentUser;
     
     Logger.info('HomePage build ediliyor. Kullanıcı: ${currentUser?.name ?? 'Yok'}', tag: 'UI');
@@ -174,10 +174,7 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => ChangeNotifierProvider<StorageService>.value(
-                                value: storageService,
-                                child: const InventoryPage(),
-                              ),
+                              builder: (context) => const InventoryPage(), // Removed ChangeNotifierProvider
                             ),
                           );
                         },

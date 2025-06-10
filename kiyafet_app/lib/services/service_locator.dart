@@ -3,8 +3,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/logger.dart';
 import 'auth_service.dart';
 import 'database_helper.dart';
-import 'storage_service.dart';
 import 'sales_service.dart';
+import 'receivable_service.dart';
+import 'accounting_service.dart'; // Add this
 
 /// Global service locator instance
 final getIt = GetIt.instance;
@@ -20,13 +21,13 @@ Future<void> setupServiceLocator() async {
     
     // Services
     getIt.registerSingleton<DatabaseHelper>(DatabaseHelper.instance);
-    getIt.registerSingleton<StorageService>(StorageService(sharedPreferences));
     getIt.registerSingleton<AuthService>(AuthService(sharedPreferences));
+    getIt.registerLazySingleton(() => ReceivableService(sharedPreferences));
+    getIt.registerLazySingleton(() => AccountingService(sharedPreferences, getIt<DatabaseHelper>())); // Add this
     
     // Lazy singleton - ihtiyaç olduğunda yükle
     getIt.registerLazySingleton<SalesService>(() => SalesService(
-      getIt<DatabaseHelper>(),
-      getIt<StorageService>(),
+      getIt<SharedPreferences>(), // Correctly pass SharedPreferences
     ));
     
     Logger.success('Service locator başarıyla yapılandırıldı', tag: 'APP');
