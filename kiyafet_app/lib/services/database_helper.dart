@@ -176,6 +176,20 @@ class DatabaseHelper {
       await _createTablesV2(db);
     }
   }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    Logger.info('Attempting to upgrade database from version $oldVersion to $newVersion', tag: 'DB_HELPER');
+    if (oldVersion < 2) {
+      Logger.info('Migrating database from v1 to v2...', tag: 'DB_HELPER');
+      // Migration scripts for V1 to V2 go here
+      // Example: await db.execute('ALTER TABLE $tableProducts ADD COLUMN new_column TEXT;');
+    }
+    // Add more conditions for future versions if needed, e.g.:
+    // if (oldVersion < 3) {
+    //   Logger.info('Migrating database from v2 to v3...', tag: 'DB_HELPER');
+    //   // Migration scripts for V2 to V3 go here
+    // }
+  }
   
   // Versiyon 1 tabloları
   Future<void> _createTablesV1(Database db) async {
@@ -253,6 +267,24 @@ class DatabaseHelper {
       )
     ''');
     print('Tüm tablolar başarıyla oluşturuldu (v1).');
+  }
+
+  Future<void> _createTablesV2(Database db) async {
+    Logger.info('Creating tables for database version 2 (based on V1 schema initially)...', tag: 'DB_HELPER');
+    await _createTablesV1(db); // Base it on V1 for now
+    // If database version 2 requires a different schema for new databases than V1,
+    // (e.g., new tables, or V1 tables with additional columns from the start),
+    // implement those CREATE TABLE statements here, replacing or augmenting the call to _createTablesV1.
+    // For example, if V2 adds a new_col to products and a new_table:
+    // await db.execute('''
+    //   CREATE TABLE $tableProducts (
+    //     $columnId TEXT PRIMARY KEY,
+    //     // ... other V1 columns ...
+    //     new_col TEXT
+    //   )
+    // ''');
+    // await db.execute('CREATE TABLE new_table (id TEXT PRIMARY KEY, data TEXT)');
+    Logger.info('Finished creating tables for database version 2.', tag: 'DB_HELPER');
   }
 
   // Veritabanını sıfırlama metodu (isteğe bağlı, dikkatli kullanılmalı)
