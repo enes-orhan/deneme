@@ -30,6 +30,15 @@ class DatabaseHelper {
   static const String tableSales = 'sales';
   static const String tableDailySummaries = 'daily_summaries';
   static const String tableExpenses = 'expenses';
+  static const String tableCreditEntries = 'credit_entries';
+
+  // Credit Entry columns
+  static const String columnCreditEntryId = 'id'; // Assuming 'id' will be the primary key
+  // static const String columnName = 'name'; // Already exists, but good to be mindful
+  static const String columnSurname = 'surname';
+  static const String columnRemainingDebt = 'remainingDebt';
+  static const String columnLastPaymentAmount = 'lastPaymentAmount';
+  static const String columnLastPaymentDate = 'lastPaymentDate';
 
   // Product sütunları
   static const String columnId = 'id';
@@ -66,7 +75,7 @@ class DatabaseHelper {
     
     Directory documentsDirectory = await getApplicationDocumentsDirectory();
     _dbPath = join(documentsDirectory.path, _dbName);
-    print('DB_HELPER_INFO: Veritabanı yolu: $_dbPath');
+    Logger.info('Veritabanı yolu: $_dbPath', tag: 'DB_HELPER');
     return _dbPath!;
   }
   
@@ -152,16 +161,16 @@ class DatabaseHelper {
           version: 1,
           onCreate: _createDB,
           onOpen: (db) async {
-            print('DB_HELPER_INFO: Veritabanı yeniden açıldı.');
+            Logger.info('Veritabanı yeniden açıldı.', tag: 'DB_HELPER');
           },
           onDowngrade: onDatabaseDowngradeDelete,
           readOnly: false,
           singleInstance: false,
         );
-        print('DB_HELPER_SUCCESS: Veritabanı yeniden oluşturuldu.');
+        Logger.success('Veritabanı yeniden oluşturuldu.', tag: 'DB_HELPER');
         return db;
       } catch (retryError) {
-        print('DB_HELPER_ERROR: Veritabanı yeniden oluşturulurken kritik hata: $retryError');
+        Logger.error('Veritabanı yeniden oluşturulurken kritik hata', tag: 'DB_HELPER', error: retryError);
         rethrow;
       }
     }
@@ -173,8 +182,25 @@ class DatabaseHelper {
     if (version == 1) {
       await _createTablesV1(db);
     } else if (version >= 2) {
-      await _createTablesV2(db);
+      // For new DBs version 2 or higher, create V1 tables then V2 specific tables
+      await _createTablesV1(db);
+      await _createCreditEntriesTableV2(db);
     }
+  }
+
+  // Helper method to create credit_entries table for V2 DB
+  Future<void> _createCreditEntriesTableV2(Database db) async {
+    await db.execute('''
+      CREATE TABLE $tableCreditEntries (
+        $columnCreditEntryId TEXT PRIMARY KEY,
+        $columnName TEXT NOT NULL,
+        $columnSurname TEXT NOT NULL,
+        $columnRemainingDebt REAL NOT NULL,
+        $columnLastPaymentAmount REAL NOT NULL,
+        $columnLastPaymentDate TEXT NOT NULL
+      )
+    ''');
+    Logger.info('Tablo $tableCreditEntries oluşturuldu (v2).', tag: 'DB_HELPER');
   }
   
   // Versiyon 1 tabloları
@@ -252,12 +278,25 @@ class DatabaseHelper {
         timestamp TEXT
       )
     ''');
-    print('Tüm tablolar başarıyla oluşturuldu (v1).');
+    Logger.info('Tüm tablolar başarıyla oluşturuldu (v1).', tag: 'DB_HELPER');
+  }
+
+  // onUpgrade callback to handle schema migrations
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    Logger.info('Veritabanı yükseltiliyor: $oldVersion -> $newVersion', tag: 'DB_HELPER');
+    if (oldVersion < 2) {
+      // Upgrade from V1 to V2: Add credit_entries table
+      await _createCreditEntriesTableV2(db);
+    }
+    // Add more upgrade steps here for future versions
+    // if (oldVersion < 3) {
+    //   await _upgradeToV3(db); // Example for a future V3
+    // }
   }
 
   // Veritabanını sıfırlama metodu (isteğe bağlı, dikkatli kullanılmalı)
   Future<void> resetDatabase() async {
-    print('Veritabanı sıfırlanıyor...');
+    Logger.info('Veritabanı sıfırlanıyor...', tag: 'DB_HELPER');
     if (_database != null && _database!.isOpen) {
       await _database!.close();
       _database = null;
@@ -268,14 +307,14 @@ class DatabaseHelper {
       final dbFile = File(path);
       if (await dbFile.exists()) {
         await dbFile.delete();
-        print('Veritabanı dosyası silindi.');
+        Logger.info('Veritabanı dosyası silindi.', tag: 'DB_HELPER');
       }
       
       // Yeni veritabanı oluştur
       _database = await openConnection();
-      print('Yeni veritabanı oluşturuldu.');
+      Logger.info('Yeni veritabanı oluşturuldu.', tag: 'DB_HELPER');
     } catch (e) {
-      print('Veritabanı sıfırlama hatası: $e');
+      Logger.error('Veritabanı sıfırlama hatası', tag: 'DB_HELPER', error: e);
       rethrow;
     }
   }
@@ -285,7 +324,7 @@ class DatabaseHelper {
     if (_database != null && _database!.isOpen) {
       await _database!.close();
       _database = null; // Referansı temizle
-      print('Veritabanı bağlantısı kapatıldı.');
+      Logger.info('Veritabanı bağlantısı kapatıldı.', tag: 'DB_HELPER');
     }
   }
 
@@ -444,22 +483,21 @@ class DatabaseHelper {
     Database? db;
     try {
       db = await openConnection();
-      print('DB_HELPER_INFO: readAllSales için veritabanı bağlantısı açıldı.');
+      Logger.info('readAllSales için veritabanı bağlantısı açıldı.', tag: 'DB_HELPER');
       
       final result = await db.query(tableSales, orderBy: 'timestamp DESC');
-      print('DB_HELPER_INFO: ${result.length} adet satış okundu.');
+      Logger.info('${result.length} adet satış okundu.', tag: 'DB_HELPER');
       return result;
     } catch (e, stackTrace) {
-      print('DB_HELPER_ERROR: Satışları okuma hatası: $e');
-      print('DB_HELPER_STACKTRACE: $stackTrace');
+      Logger.error('Satışları okuma hatası', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
       return [];
     } finally {
       if (db != null) {
         try {
           await db.close();
-          print('DB_HELPER_INFO: readAllSales için veritabanı bağlantısı kapatıldı.');
+          Logger.info('readAllSales için veritabanı bağlantısı kapatıldı.', tag: 'DB_HELPER');
         } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
+          Logger.warn('Veritabanı bağlantısı kapatılırken hata', tag: 'DB_HELPER', error: closeError);
         }
       }
     }
@@ -470,12 +508,12 @@ class DatabaseHelper {
     Database? db;
     try {
       db = await openConnection();
-      print('DB_HELPER_INFO: updateSale için veritabanı bağlantısı açıldı.');
+      Logger.info('updateSale için veritabanı bağlantısı açıldı.', tag: 'DB_HELPER');
       
       // Satış ID'sini kontrol et
       final saleId = sale['id']?.toString();
       if (saleId == null || saleId.isEmpty) {
-        print('DB_HELPER_ERROR: Güncellenecek satış için ID belirtilmedi.');
+        Logger.error('Güncellenecek satış için ID belirtilmedi.', tag: 'DB_HELPER');
         return 0;
       }
       
@@ -487,19 +525,18 @@ class DatabaseHelper {
         whereArgs: [saleId],
       );
       
-      print('DB_HELPER_INFO: Satış güncellendi. Etkilenen satır: $result');
+      Logger.info('Satış güncellendi. Etkilenen satır: $result', tag: 'DB_HELPER');
       return result;
     } catch (e, stackTrace) {
-      print('DB_HELPER_ERROR: Satış güncelleme hatası: $e');
-      print('DB_HELPER_STACKTRACE: $stackTrace');
+      Logger.error('Satış güncelleme hatası', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
       return 0;
     } finally {
       if (db != null) {
         try {
           await db.close();
-          print('DB_HELPER_INFO: updateSale için veritabanı bağlantısı kapatıldı.');
+          Logger.info('updateSale için veritabanı bağlantısı kapatıldı.', tag: 'DB_HELPER');
         } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
+          Logger.warn('Veritabanı bağlantısı kapatılırken hata', tag: 'DB_HELPER', error: closeError);
         }
       }
     }
@@ -510,7 +547,7 @@ class DatabaseHelper {
     Database? db;
     try {
       db = await openConnection();
-      print('DB_HELPER_INFO: deleteSale için veritabanı bağlantısı açıldı.');
+      Logger.info('deleteSale için veritabanı bağlantısı açıldı.', tag: 'DB_HELPER');
       
       // Satışı sil
       final result = await db.delete(
@@ -519,32 +556,31 @@ class DatabaseHelper {
         whereArgs: [id],
       );
       
-      print('DB_HELPER_INFO: Satış silindi. Etkilenen satır: $result');
+      Logger.info('Satış silindi. Etkilenen satır: $result', tag: 'DB_HELPER');
       return result;
     } catch (e, stackTrace) {
-      print('DB_HELPER_ERROR: Satış silme hatası: $e');
-      print('DB_HELPER_STACKTRACE: $stackTrace');
+      Logger.error('Satış silme hatası', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
       return 0;
     } finally {
       if (db != null) {
         try {
           await db.close();
-          print('DB_HELPER_INFO: deleteSale için veritabanı bağlantısı kapatıldı.');
+          Logger.info('deleteSale için veritabanı bağlantısı kapatıldı.', tag: 'DB_HELPER');
         } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
+          Logger.warn('Veritabanı bağlantısı kapatılırken hata', tag: 'DB_HELPER', error: closeError);
         }
       }
     }
   }
   
   Future<int> createSale(Map<String, dynamic> sale) async {
-    print('DB_HELPER_INFO: createSale başlatıldı. Satış ID: ${sale['id'] ?? 'Yeni Satış'}');
+    Logger.info('createSale başlatıldı. Satış ID: ${sale['id'] ?? 'Yeni Satış'}', tag: 'DB_HELPER');
     
     Database? db;
     try {
       // Yeni bir veritabanı bağlantısı aç
       db = await openConnection();
-      print('DB_HELPER_INFO: Satış için yeni veritabanı bağlantısı açıldı.');
+      Logger.info('Satış için yeni veritabanı bağlantısı açıldı.', tag: 'DB_HELPER');
       
       // Satış verisini hazırla
       Map<String, dynamic> saleToInsert = Map.from(sale); // Orijinal haritayı değiştirmemek için kopyasını oluştur
@@ -552,7 +588,7 @@ class DatabaseHelper {
       // ID kontrolü
       if (saleToInsert['id'] == null || saleToInsert['id'].toString().isEmpty) {
         saleToInsert['id'] = const Uuid().v4();
-        print('DB_HELPER_INFO: Yeni satış ID oluşturuldu: ${saleToInsert['id']}');
+        Logger.info('Yeni satış ID oluşturuldu: ${saleToInsert['id']}', tag: 'DB_HELPER');
       } else {
         // Mevcut ID ile satış var mı kontrol et
         try {
@@ -563,13 +599,13 @@ class DatabaseHelper {
           );
           
           if (existingSales.isNotEmpty) {
-            print('DB_HELPER_INFO: ${saleToInsert['id']} ID li satış zaten var. Yeni ID oluşturuluyor.');
+            Logger.info('${saleToInsert['id']} ID li satış zaten var. Yeni ID oluşturuluyor.', tag: 'DB_HELPER');
             // Eğer varsa, yeni bir ID oluştur
             saleToInsert['id'] = const Uuid().v4();
-            print('DB_HELPER_INFO: Yeni satış ID: ${saleToInsert['id']}');
+            Logger.info('Yeni satış ID: ${saleToInsert['id']}', tag: 'DB_HELPER');
           }
         } catch (queryError) {
-          print('DB_HELPER_WARN: Mevcut satış kontrolünde hata: $queryError');
+          Logger.warn('Mevcut satış kontrolünde hata', tag: 'DB_HELPER', error: queryError);
           // Sorgu hatası olsa bile devam et, en kötü ihtimalle UNIQUE constraint hatası alırız
         }
       }
@@ -580,27 +616,26 @@ class DatabaseHelper {
       saleToInsert.putIfAbsent('type', () => 'sale');
       
       // Satışı ekle
-      print('DB_HELPER_INFO: Satış veritabanına ekleniyor...');
+      Logger.info('Satış veritabanına ekleniyor...', tag: 'DB_HELPER');
       int insertedId = await db.insert(
         tableSales, 
         saleToInsert, 
         conflictAlgorithm: ConflictAlgorithm.replace
       );
       
-      print('DB_HELPER_SUCCESS: Satış başarıyla eklendi. Satır ID: $insertedId, Satış ID: ${saleToInsert['id']}');
+      Logger.success('Satış başarıyla eklendi. Satır ID: $insertedId, Satış ID: ${saleToInsert['id']}', tag: 'DB_HELPER');
       return insertedId;
     } catch (e, stackTrace) {
-      print('DB_HELPER_ERROR: Satış ekleme hatası: $e');
-      print('DB_HELPER_STACKTRACE: $stackTrace');
+      Logger.error('Satış ekleme hatası', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
       return -1;
     } finally {
       // Veritabanı bağlantısını her durumda kapat
       if (db != null) {
         try {
           await db.close();
-          print('DB_HELPER_INFO: createSale için veritabanı bağlantısı kapatıldı.');
+          Logger.info('createSale için veritabanı bağlantısı kapatıldı.', tag: 'DB_HELPER');
         } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
+          Logger.warn('Veritabanı bağlantısı kapatılırken hata', tag: 'DB_HELPER', error: closeError);
         }
       }
     }
@@ -611,7 +646,7 @@ class DatabaseHelper {
     Database? db;
     try {
       db = await openConnection();
-      print('DB_HELPER_INFO: getProduct için veritabanı bağlantısı açıldı. Ürün ID: $id');
+      Logger.info('getProduct için veritabanı bağlantısı açıldı. Ürün ID: $id', tag: 'DB_HELPER');
       
       final List<Map<String, dynamic>> maps = await db.query(
         tableProducts,
@@ -633,25 +668,25 @@ class DatabaseHelper {
       if (db != null) {
         try {
           await db.close();
-          print('DB_HELPER_INFO: getProduct için veritabanı bağlantısı kapatıldı.');
+          Logger.info('getProduct için veritabanı bağlantısı kapatıldı.', tag: 'DB_HELPER');
         } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
+          Logger.warn('Veritabanı bağlantısı kapatılırken hata', tag: 'DB_HELPER', error: closeError);
         }
       }
     }
   }
   
   Future<void> addSales(List<Map<String, dynamic>> sales) async {
-    print('DB_HELPER_INFO: addSales başlatıldı. ${sales.length} adet satış işlenecek.');
+    Logger.info('addSales başlatıldı. ${sales.length} adet satış işlenecek.', tag: 'DB_HELPER');
 
     Database? db;
     try {
       db = await openConnection();
-      print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı açıldı.');
+      Logger.info('addSales için toplu işlem bağlantısı açıldı.', tag: 'DB_HELPER');
 
       await db.transaction((txn) async {
         for (var sale in sales) {
-          print('DB_HELPER_INFO: Satış işlemi başlatılıyor (transaction içinde): ${sale['id'] ?? 'Yeni Satış'}');
+          Logger.info('Satış işlemi başlatılıyor (transaction içinde): ${sale['id'] ?? 'Yeni Satış'}', tag: 'DB_HELPER');
           
           Map<String, dynamic> saleToInsert = Map.from(sale); // Orijinal haritayı değiştirmemek için kopyasını oluştur
           if (saleToInsert['id'] == null || saleToInsert['id'].toString().isEmpty) {
@@ -674,19 +709,19 @@ class DatabaseHelper {
           saleToInsert.putIfAbsent('finalCost', () => 0.0);
 
           // Satış kaydını ekle
-          print('DB_HELPER_INFO: Satış direkt ekleniyor (ID: ${saleToInsert['id']})');
+          Logger.info('Satış direkt ekleniyor (ID: ${saleToInsert['id']})', tag: 'DB_HELPER');
           int insertedId = await txn.insert(
             tableSales, 
             saleToInsert, 
             conflictAlgorithm: ConflictAlgorithm.replace
           );
-          print('DB_HELPER_SUCCESS: Satış başarıyla eklendi. Satır ID: $insertedId, Satış ID: ${saleToInsert['id']}');
+          Logger.success('Satış başarıyla eklendi. Satır ID: $insertedId, Satış ID: ${saleToInsert['id']}', tag: 'DB_HELPER');
           
           String? productId = saleToInsert['productId']?.toString();
           int? quantitySold = int.tryParse(saleToInsert['quantity']?.toString() ?? '0');
           
           if (productId != null && productId.isNotEmpty && quantitySold != null && quantitySold > 0) {
-            print('DB_HELPER_INFO: Ürün stoğu güncelleniyor: $productId, satılan miktar: $quantitySold');
+            Logger.info('Ürün stoğu güncelleniyor: $productId, satılan miktar: $quantitySold', tag: 'DB_HELPER');
             
             List<Map<String, dynamic>> productRows = await txn.query(
               tableProducts,
@@ -698,7 +733,7 @@ class DatabaseHelper {
             if (productRows.isNotEmpty) {
               int currentQuantity = productRows.first['quantity'] as int? ?? 0;
               int newQuantity = currentQuantity - quantitySold;
-              print('DB_HELPER_INFO: Mevcut stok: $currentQuantity, yeni stok: $newQuantity (Ürün ID: $productId)');
+              Logger.info('Mevcut stok: $currentQuantity, yeni stok: $newQuantity (Ürün ID: $productId)', tag: 'DB_HELPER');
               
               int updatedRows = await txn.update(
                 tableProducts,
@@ -707,37 +742,109 @@ class DatabaseHelper {
                 whereArgs: [productId],
               );
               
-              print('DB_HELPER_SUCCESS: Ürün stoğu başarıyla güncellendi: $productId, etkilenen satır: $updatedRows');
+              Logger.success('Ürün stoğu başarıyla güncellendi: $productId, etkilenen satır: $updatedRows', tag: 'DB_HELPER');
               if (updatedRows == 0) {
-                print('DB_HELPER_WARN: Ürün ($productId) stok güncelleme sırasında bulunamadı veya değer aynıydı.');
+                Logger.warn('Ürün ($productId) stok güncelleme sırasında bulunamadı veya değer aynıydı.', tag: 'DB_HELPER');
               }
             } else {
-              print('DB_HELPER_WARN: Ürün bulunamadı ($productId), stok güncellenemedi.'); } else { print('DB_HELPER_INFO: productId ($productId) veya quantitySold ($quantitySold) geçersiz olduğu için stok güncellenmedi.'); } } }); print('DB_HELPER_INFO: addSales transaction tamamlandı.'); } catch (e, stacktrace) { print('DB_HELPER_ERROR: addSales toplu işlemi sırasında hata: $e'); print('DB_HELPER_STACKTRACE: $stacktrace'); rethrow; // Hatayı yukarıya fırlat ki SalesService haberdar olsun } finally { // Veritabanı bağlantısını her durumda kapat if (db != null) { try { await db.close(); print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı kapatıldı.'); } catch (closeError) { print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError'); } } }
-            } else {
-              print('DB_HELPER_WARN: Ürün bulunamadı ($productId), stok güncellenemedi.');
+              Logger.warn('Ürün bulunamadı ($productId), stok güncellenemedi.', tag: 'DB_HELPER');
             }
           } else {
-            print('DB_HELPER_INFO: productId ($productId) veya quantitySold ($quantitySold) geçersiz olduğu için stok güncellenmedi.');
+            Logger.info('productId ($productId) veya quantitySold ($quantitySold) geçersiz olduğu için stok güncellenmedi.', tag: 'DB_HELPER');
           }
         }
       });
-      print('DB_HELPER_INFO: addSales transaction tamamlandı.');
+      Logger.info('addSales transaction tamamlandı.', tag: 'DB_HELPER');
     } catch (e, stacktrace) {
-      print('DB_HELPER_ERROR: addSales toplu işlemi sırasında hata: $e');
-      print('DB_HELPER_STACKTRACE: $stacktrace');
+      Logger.error('addSales toplu işlemi sırasında hata', tag: 'DB_HELPER', error: e, stackTrace: stacktrace);
       rethrow; // Hatayı yukarıya fırlat ki SalesService haberdar olsun
     } finally {
       // Veritabanı bağlantısını her durumda kapat
       if (db != null) {
         try {
           await db.close();
-          print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı kapatıldı.');
+          Logger.info('addSales için toplu işlem bağlantısı kapatıldı.', tag: 'DB_HELPER');
         } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
+          Logger.warn('Veritabanı bağlantısı kapatılırken hata', tag: 'DB_HELPER', error: closeError);
         }
       }
     }
     
-    print('DB_HELPER_INFO: addSales tamamlandı. Tüm satışlar işlendi (veya hata oluştu).');
+    Logger.info('addSales tamamlandı. Tüm satışlar işlendi (veya hata oluştu).', tag: 'DB_HELPER');
+  }
+
+  // CREDIT ENTRY METOTLARI
+
+  Future<int> createCreditEntry(Map<String, dynamic> creditEntry) async {
+    try {
+      final db = await database;
+      // Ensure 'id' is present, if not, Uuid().v4() could be used here or handled by model.
+      // For this implementation, we assume id is provided or handled by the caller/model.
+      Logger.info('Creating credit entry: ${creditEntry[columnCreditEntryId]}', tag: 'DB_HELPER');
+      final result = await db.insert(
+        tableCreditEntries,
+        creditEntry,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      Logger.success('Credit entry created. Rows affected: $result', tag: 'DB_HELPER');
+      return result;
+    } catch (e, stackTrace) {
+      Logger.error('Error creating credit entry', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
+      throw DatabaseException('Failed to create credit entry', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> readAllCreditEntries() async {
+    try {
+      final db = await database;
+      Logger.info('Reading all credit entries', tag: 'DB_HELPER');
+      // Order by name ascending. Could also order by columnLastPaymentDate DESC for recent activity.
+      final result = await db.query(tableCreditEntries, orderBy: '$columnName ASC');
+      Logger.success('Read ${result.length} credit entries.', tag: 'DB_HELPER');
+      return result;
+    } catch (e, stackTrace) {
+      Logger.error('Error reading all credit entries', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
+      throw DatabaseException('Failed to read credit entries', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  Future<int> updateCreditEntry(Map<String, dynamic> creditEntry) async {
+    try {
+      final db = await database;
+      final id = creditEntry[columnCreditEntryId];
+      if (id == null) {
+        Logger.error('Error updating credit entry: ID is null.', tag: 'DB_HELPER');
+        throw DatabaseException('Failed to update credit entry: ID cannot be null.');
+      }
+      Logger.info('Updating credit entry: $id', tag: 'DB_HELPER');
+      final result = await db.update(
+        tableCreditEntries,
+        creditEntry,
+        where: '$columnCreditEntryId = ?',
+        whereArgs: [id],
+      );
+      Logger.success('Credit entry updated. Rows affected: $result', tag: 'DB_HELPER');
+      return result;
+    } catch (e, stackTrace) {
+      Logger.error('Error updating credit entry', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
+      throw DatabaseException('Failed to update credit entry', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  Future<int> deleteCreditEntry(String id) async {
+    try {
+      final db = await database;
+      Logger.info('Deleting credit entry: $id', tag: 'DB_HELPER');
+      final result = await db.delete(
+        tableCreditEntries,
+        where: '$columnCreditEntryId = ?',
+        whereArgs: [id],
+      );
+      Logger.success('Credit entry deleted. Rows affected: $result', tag: 'DB_HELPER');
+      return result;
+    } catch (e, stackTrace) {
+      Logger.error('Error deleting credit entry', tag: 'DB_HELPER', error: e, stackTrace: stackTrace);
+      throw DatabaseException('Failed to delete credit entry', error: e, stackTrace: stackTrace);
+    }
   }
 }

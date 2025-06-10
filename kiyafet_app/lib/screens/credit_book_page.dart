@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
+// import 'dart:convert'; // Removed
 import 'dart:io';
 import 'dart:math';
-import 'package:shared_preferences/shared_preferences.dart';
+// import 'package:shared_preferences/shared_preferences.dart'; // Removed
+import '../services/database_helper.dart'; // Added
 import '../models/credit_entry.dart';
 import '../constants/app_constants.dart';
 import 'package:file_picker/file_picker.dart';
@@ -20,7 +21,7 @@ class _CreditBookPageState extends State<CreditBookPage> {
   List<CreditEntry> _entries = [];
   List<CreditEntry> _filteredEntries = [];
   String _searchQuery = '';
-  static const String _prefsKey = 'credit_entries';
+  // static const String _prefsKey = 'credit_entries'; // Removed
 
   @override
   void initState() {
@@ -29,12 +30,34 @@ class _CreditBookPageState extends State<CreditBookPage> {
   }
 
   Future<void> _loadEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getStringList(_prefsKey) ?? [];
-    setState(() {
-      _entries = data.map((e) => CreditEntry.fromMap(jsonDecode(e))).toList();
-      _filteredEntries = List.from(_entries);
-    });
+    try {
+      _entries.clear(); // Clear existing entries
+      final List<Map<String, dynamic>> maps = await DatabaseHelper.instance.readAllCreditEntries();
+      final List<CreditEntry> loadedEntries = maps.map((map) => CreditEntry.fromMap(map)).toList();
+
+      // Sort entries, for example by name then surname
+      // This ensures a consistent order if your DB doesn't guarantee it or if you want a specific app order.
+      loadedEntries.sort((a, b) {
+        int nameComparison = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        if (nameComparison != 0) {
+          return nameComparison;
+        }
+        return a.surname.toLowerCase().compareTo(b.surname.toLowerCase());
+      });
+
+      setState(() {
+        _entries = loadedEntries;
+        _filteredEntries = List.from(_entries); // Initialize filtered list
+      });
+    } catch (e) {
+      // Log the error or show a user-friendly message
+      print('Error loading credit entries: $e');
+      if (mounted) { // Check if the widget is still in the tree
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Veresiye kayıtları yüklenirken bir hata oluştu: $e')),
+        );
+      }
+    }
   }
 
   void _filterEntries(String query) {
@@ -55,11 +78,11 @@ class _CreditBookPageState extends State<CreditBookPage> {
     });
   }
 
-  Future<void> _saveEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = _entries.map((e) => jsonEncode(e.toMap())).toList();
-    await prefs.setStringList(_prefsKey, data);
-  }
+  // Future<void> _saveEntries() async { // Removed
+  //   final prefs = await SharedPreferences.getInstance();
+  //   final data = _entries.map((e) => jsonEncode(e.toMap())).toList();
+  //   await prefs.setStringList(_prefsKey, data);
+  // }
 
   Future<bool> _requestPermissions() async {
     // Android 13 ve üzeri için farklı izinleri iste
@@ -228,14 +251,24 @@ class _CreditBookPageState extends State<CreditBookPage> {
             }
             
             if (newEntries.isNotEmpty) {
-              setState(() {
-                _entries.addAll(newEntries);
-                _filteredEntries = List.from(_entries);
-              });
-              await _saveEntries();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('${newEntries.length} veresiye kaydı içe aktarıldı')),
-              );
+              try {
+                for (final parsedEntry in newEntries) {
+                  // The CreditEntry model now generates an ID if one isn't provided.
+                  // If CSV might contain IDs, ensure CreditEntry.fromMap handles it or
+                  // create CreditEntry instance here explicitly managing ID.
+                  // Assuming CreditEntry.fromMap correctly assigns/generates ID.
+                  await DatabaseHelper.instance.createCreditEntry(parsedEntry.toMap());
+                }
+                await _loadEntries(); // Refresh list from DB
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('${newEntries.length} veresiye kaydı başarıyla veritabanına aktarıldı.')),
+                );
+              } catch (e) {
+                print('Error importing CSV entries to database: $e');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Kayıtlar veritabanına aktarılırken hata: $e')),
+                );
+              }
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('CSV dosyasında geçerli veri bulunamadı. Lütfen format ve içeriği kontrol edin.')),
@@ -401,6 +434,29 @@ class _CreditBookPageState extends State<CreditBookPage> {
             ),
           ),
           actions: [
+            if (entry != null) // Show Delete button only in edit mode
+              TextButton(
+                onPressed: () async {
+                  try {
+                    // Optional: Show a confirmation dialog before deleting
+                    // bool confirmDelete = await showDialog(...);
+                    // if (confirmDelete == true) {
+                    await DatabaseHelper.instance.deleteCreditEntry(entry.id);
+                    Navigator.pop(context); // Close the edit dialog
+                    await _loadEntries(); // Refresh the list
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Veresiye kaydı silindi.')),
+                    );
+                    // }
+                  } catch (e) {
+                    print('Error deleting credit entry: $e');
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Silme işlemi sırasında hata: $e')),
+                    );
+                  }
+                },
+                child: const Text('Sil', style: TextStyle(color: Colors.red)),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('İptal'),
@@ -408,23 +464,42 @@ class _CreditBookPageState extends State<CreditBookPage> {
             ElevatedButton(
               onPressed: () async {
                 if (formKey.currentState?.validate() ?? false && selectedDate != null) {
-                  final newEntry = CreditEntry(
-                    name: nameController.text,
-                    surname: surnameController.text,
-                    remainingDebt: double.tryParse(remainingDebtController.text) ?? 0.0,
-                    lastPaymentAmount: double.tryParse(lastPaymentAmountController.text) ?? 0.0,
-                    lastPaymentDate: selectedDate!,
-                  );
-                  setState(() {
-                    if (entry == null) {
-                      _entries.add(newEntry);
-                    } else if (index != null) {
-                      _entries[index] = newEntry;
+                  try {
+                    if (entry == null) { // Adding new entry
+                      final newCreditEntry = CreditEntry(
+                        // id will be auto-generated by the model
+                        name: nameController.text,
+                        surname: surnameController.text,
+                        remainingDebt: double.tryParse(remainingDebtController.text) ?? 0.0,
+                        lastPaymentAmount: double.tryParse(lastPaymentAmountController.text) ?? 0.0,
+                        lastPaymentDate: selectedDate!,
+                      );
+                      await DatabaseHelper.instance.createCreditEntry(newCreditEntry.toMap());
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Yeni veresiye kaydı eklendi!')),
+                      );
+                    } else { // Editing existing entry
+                      final updatedCreditEntry = CreditEntry(
+                        id: entry.id, // Preserve existing ID
+                        name: nameController.text,
+                        surname: surnameController.text,
+                        remainingDebt: double.tryParse(remainingDebtController.text) ?? 0.0,
+                        lastPaymentAmount: double.tryParse(lastPaymentAmountController.text) ?? 0.0,
+                        lastPaymentDate: selectedDate!,
+                      );
+                      await DatabaseHelper.instance.updateCreditEntry(updatedCreditEntry.toMap());
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Veresiye kaydı güncellendi!')),
+                      );
                     }
-                    _filteredEntries = List.from(_entries);
-                  });
-                  await _saveEntries();
-                  Navigator.pop(context);
+                    await _loadEntries(); // Refresh the list from DB
+                    Navigator.pop(context); // Close dialog
+                  } catch (e) {
+                    print('Error saving credit entry: $e');
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Kayıt işlemi sırasında hata: $e')),
+                    );
+                  }
                 }
               },
               child: Text(entry == null ? 'Ekle' : 'Kaydet'),
