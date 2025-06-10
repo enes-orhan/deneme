@@ -27,9 +27,7 @@ class StorageService {
   List<Map<String, dynamic>>? _salesCache;
   DateTime? _lastCacheUpdate;
 
-  StorageService(this._prefs)
-      : _productService = ProductService(_prefs),
-        _salesService = SalesService(_prefs);
+  StorageService(this._prefs, this._productService, this._salesService);
 
   /// Veritabanını ve önbellekleri sıfırlar. Başarılıysa true, hata varsa false döner.
   Future<bool> resetDatabase() async {

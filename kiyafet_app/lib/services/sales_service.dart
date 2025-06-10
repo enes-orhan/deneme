@@ -3,11 +3,13 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
 import 'database_helper.dart';
+// import 'storage_service.dart'; // Removed import
 import 'package:uuid/uuid.dart';
 
 class SalesService {
   final SharedPreferences _prefs;
-  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  final DatabaseHelper _dbHelper;
+  // final StorageService _storageService; // Removed field
   static const String _salesKey = 'sales';
   static const String _dailySalesKey = 'daily_sales';
   
@@ -15,7 +17,7 @@ class SalesService {
   List<Map<String, dynamic>>? _salesCache;
   DateTime? _lastCacheUpdate;
 
-  SalesService(this._prefs);
+  SalesService(this._prefs, this._dbHelper); // Updated constructor
 
   Future<List<Map<String, dynamic>>> getSales() async {
     if (_salesCache != null && _lastCacheUpdate != null) {

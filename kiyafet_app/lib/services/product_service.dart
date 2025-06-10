@@ -6,14 +6,14 @@ import 'database_helper.dart';
 
 class ProductService {
   final SharedPreferences _prefs;
-  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  final DatabaseHelper _dbHelper;
   static const String _productsKey = 'products';
   
   // Önbellek
   List<Product>? _productsCache;
   DateTime? _lastCacheUpdate;
 
-  ProductService(this._prefs);
+  ProductService(this._prefs, this._dbHelper);
 
   Future<List<Product>> getProducts() async {
     if (_productsCache != null && _lastCacheUpdate != null) {

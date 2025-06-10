@@ -5,6 +5,7 @@ import 'auth_service.dart';
 import 'database_helper.dart';
 import 'storage_service.dart';
 import 'sales_service.dart';
+import 'product_service.dart';
 
 /// Global service locator instance
 final getIt = GetIt.instance;
@@ -20,14 +21,34 @@ Future<void> setupServiceLocator() async {
     
     // Services
     getIt.registerSingleton<DatabaseHelper>(DatabaseHelper.instance);
-    getIt.registerSingleton<StorageService>(StorageService(sharedPreferences));
-    getIt.registerSingleton<AuthService>(AuthService(sharedPreferences));
+    // ProductService needs to be registered before StorageService
+    getIt.registerSingleton<ProductService>(ProductService(getIt<SharedPreferences>(), getIt<DatabaseHelper>()));
+
+    // SalesService needs to be registered before StorageService.
+    // It's a LazySingleton and depends on StorageService, this might be an issue.
+    // Forcing StorageService to be resolved for SalesService constructor.
+    // However, the task is to inject SalesService into StorageService.
+    // Let's register SalesService first, then StorageService.
+    // The circular dependency is: StorageService -> SalesService AND SalesService -> StorageService.
+    // GetIt handles this if one of them is lazy. SalesService is lazy.
     
-    // Lazy singleton - ihtiyaç olduğunda yükle
+    // Forward declaration for SalesService if needed, but get_it should handle lazy.
+
+    // Register SalesService (lazy)
     getIt.registerLazySingleton<SalesService>(() => SalesService(
+      getIt<SharedPreferences>(),
       getIt<DatabaseHelper>(),
-      getIt<StorageService>(),
+      // getIt<StorageService>(), // Removed StorageService dependency
     ));
+
+    // Register StorageService
+    getIt.registerSingleton<StorageService>(StorageService(
+      getIt<SharedPreferences>(),
+      getIt<ProductService>(),
+      getIt<SalesService>(), // This will try to get SalesService
+    ));
+
+    getIt.registerSingleton<AuthService>(AuthService(sharedPreferences));
     
     Logger.success('Service locator başarıyla yapılandırıldı', tag: 'APP');
   } catch (e, stackTrace) {
