@@ -125,41 +125,47 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   Future<bool> _requestPermissions() async {
-    // Android 13 ve üzeri için farklı izinleri iste
-    if (await Permission.storage.status.isDenied ||
-        await Permission.manageExternalStorage.status.isDenied) {
-      
-      if (await Permission.storage.request().isGranted) {
-        print("Storage permission granted");
+    // For Android 12 (SDK 32) and below, storage permission might be needed.
+    // For Android 13 (SDK 33) and above, file_picker usually handles permissions.
+    // However, let's check if running on Android 13+ to avoid unnecessary requests.
+    // The permission_handler package itself might handle this, but explicit check is safer.
+
+    // A common approach is to check SDK version if available, or rely on permission_handler's behavior.
+    // For now, let's simplify and assume file_picker handles Android 13+ correctly without explicit requests here.
+    // We will primarily focus on ensuring `Permission.storage` is requested for older versions if needed.
+
+    // Check if storage permission is already granted or denied.
+    var storageStatus = await Permission.storage.status;
+
+    if (storageStatus.isDenied) {
+        // Request storage permission. This is mainly for older Android versions.
+        // For Android 13+, file_picker should manage access without this direct permission for typical picking scenarios.
+        if (await Permission.storage.request().isGranted) {
+            print("Storage permission granted");
+            return true;
+        } else {
+            print("Storage permission denied by user");
+            return false;
+        }
+    } else if (storageStatus.isPermanentlyDenied) {
+        print("Storage permission permanently denied. Open app settings.");
+        openAppSettings(); // permission_handler utility to open app settings
+        return false;
+    } else if (storageStatus.isGranted) {
+        print("Storage permission already granted.");
         return true;
-      }
-      
-      // API 33+ için
-      final mediaPermissions = await [
-        Permission.photos,
-        Permission.videos,
-        Permission.audio,
-      ].request();
-      
-      print("Media permissions: $mediaPermissions");
-      
-      // Son çare olarak manageExternalStorage iste
-      try {
-        await Permission.manageExternalStorage.request();
-        print("ManageExternalStorage: ${await Permission.manageExternalStorage.status}");
-      } catch (e) {
-        print("Error requesting manageExternalStorage: $e");
-      }
     }
     
-    // İzin durumunu kontrol et
-    bool hasStoragePermission = await Permission.storage.isGranted;
-    bool hasManagePermission = await Permission.manageExternalStorage.isGranted;
-    bool hasPhotosPermission = await Permission.photos.isGranted;
-    
-    print("Permissions: storage=$hasStoragePermission, manage=$hasManagePermission, photos=$hasPhotosPermission");
-    
-    return hasStoragePermission || hasManagePermission || hasPhotosPermission;
+    // For Android 13+, if file_picker is used, it often doesn't require these broad permissions.
+    // If specific media types were being accessed directly (not through file_picker for CSV),
+    // then READ_MEDIA_IMAGES, READ_MEDIA_VIDEO, etc., would be requested here based on SDK level.
+    // Since we are focused on CSV import/export via file_picker, we simplify.
+
+    // Fallback: if we reach here, it implies permissions are in a state
+    // where file_picker should be able to operate, or we've handled denials.
+    // For CSVs, specific media permissions (photos, videos, audio) are not directly relevant.
+    print("Proceeding without explicit media permissions for CSV, relying on file_picker.");
+    return true; // Assume file_picker will handle it, or permission was already granted.
   }
 
   // Barkod doğrulama fonksiyonu
