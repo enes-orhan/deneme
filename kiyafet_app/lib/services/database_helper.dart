@@ -441,10 +441,9 @@ class DatabaseHelper {
   
   // Tüm satışları oku
   Future<List<Map<String, dynamic>>> readAllSales() async {
-    Database? db;
     try {
-      db = await openConnection();
-      print('DB_HELPER_INFO: readAllSales için veritabanı bağlantısı açıldı.');
+      final db = await database;
+      print('DB_HELPER_INFO: readAllSales için veritabanı bağlantısı kullanılıyor.');
       
       final result = await db.query(tableSales, orderBy: 'timestamp DESC');
       print('DB_HELPER_INFO: ${result.length} adet satış okundu.');
@@ -452,31 +451,21 @@ class DatabaseHelper {
     } catch (e, stackTrace) {
       print('DB_HELPER_ERROR: Satışları okuma hatası: $e');
       print('DB_HELPER_STACKTRACE: $stackTrace');
-      return [];
-    } finally {
-      if (db != null) {
-        try {
-          await db.close();
-          print('DB_HELPER_INFO: readAllSales için veritabanı bağlantısı kapatıldı.');
-        } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
-        }
-      }
+      throw DatabaseException('Satış listesi okunamadı', error: e, stackTrace: stackTrace);
     }
   }
 
   // Satış güncelleme
   Future<int> updateSale(Map<String, dynamic> sale) async {
-    Database? db;
     try {
-      db = await openConnection();
-      print('DB_HELPER_INFO: updateSale için veritabanı bağlantısı açıldı.');
+      final db = await database;
+      print('DB_HELPER_INFO: updateSale için veritabanı bağlantısı kullanılıyor.');
       
       // Satış ID'sini kontrol et
       final saleId = sale['id']?.toString();
       if (saleId == null || saleId.isEmpty) {
         print('DB_HELPER_ERROR: Güncellenecek satış için ID belirtilmedi.');
-        return 0;
+        throw DatabaseException('Güncellenecek satış için ID belirtilmedi.');
       }
       
       // Satışı güncelle
@@ -492,25 +481,15 @@ class DatabaseHelper {
     } catch (e, stackTrace) {
       print('DB_HELPER_ERROR: Satış güncelleme hatası: $e');
       print('DB_HELPER_STACKTRACE: $stackTrace');
-      return 0;
-    } finally {
-      if (db != null) {
-        try {
-          await db.close();
-          print('DB_HELPER_INFO: updateSale için veritabanı bağlantısı kapatıldı.');
-        } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
-        }
-      }
+      throw DatabaseException('Satış güncellenemedi', error: e, stackTrace: stackTrace);
     }
   }
   
   // Satış silme
   Future<int> deleteSale(String id) async {
-    Database? db;
     try {
-      db = await openConnection();
-      print('DB_HELPER_INFO: deleteSale için veritabanı bağlantısı açıldı.');
+      final db = await database;
+      print('DB_HELPER_INFO: deleteSale için veritabanı bağlantısı kullanılıyor.');
       
       // Satışı sil
       final result = await db.delete(
@@ -524,27 +503,17 @@ class DatabaseHelper {
     } catch (e, stackTrace) {
       print('DB_HELPER_ERROR: Satış silme hatası: $e');
       print('DB_HELPER_STACKTRACE: $stackTrace');
-      return 0;
-    } finally {
-      if (db != null) {
-        try {
-          await db.close();
-          print('DB_HELPER_INFO: deleteSale için veritabanı bağlantısı kapatıldı.');
-        } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
-        }
-      }
+      throw DatabaseException('Satış silinemedi', error: e, stackTrace: stackTrace);
     }
   }
   
   Future<int> createSale(Map<String, dynamic> sale) async {
     print('DB_HELPER_INFO: createSale başlatıldı. Satış ID: ${sale['id'] ?? 'Yeni Satış'}');
     
-    Database? db;
     try {
       // Yeni bir veritabanı bağlantısı aç
-      db = await openConnection();
-      print('DB_HELPER_INFO: Satış için yeni veritabanı bağlantısı açıldı.');
+      final db = await database;
+      print('DB_HELPER_INFO: Satış için veritabanı bağlantısı kullanılıyor.');
       
       // Satış verisini hazırla
       Map<String, dynamic> saleToInsert = Map.from(sale); // Orijinal haritayı değiştirmemek için kopyasını oluştur
@@ -592,26 +561,15 @@ class DatabaseHelper {
     } catch (e, stackTrace) {
       print('DB_HELPER_ERROR: Satış ekleme hatası: $e');
       print('DB_HELPER_STACKTRACE: $stackTrace');
-      return -1;
-    } finally {
-      // Veritabanı bağlantısını her durumda kapat
-      if (db != null) {
-        try {
-          await db.close();
-          print('DB_HELPER_INFO: createSale için veritabanı bağlantısı kapatıldı.');
-        } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
-        }
-      }
+      throw DatabaseException('Satış eklenemedi', error: e, stackTrace: stackTrace);
     }
   }
 
   // Ürün getirme metodu
   Future<Product?> getProduct(String id) async {
-    Database? db;
     try {
-      db = await openConnection();
-      print('DB_HELPER_INFO: getProduct için veritabanı bağlantısı açıldı. Ürün ID: $id');
+      final db = await database;
+      print('DB_HELPER_INFO: getProduct için veritabanı bağlantısı kullanılıyor. Ürün ID: $id');
       
       final List<Map<String, dynamic>> maps = await db.query(
         tableProducts,
@@ -644,10 +602,9 @@ class DatabaseHelper {
   Future<void> addSales(List<Map<String, dynamic>> sales) async {
     print('DB_HELPER_INFO: addSales başlatıldı. ${sales.length} adet satış işlenecek.');
 
-    Database? db;
     try {
-      db = await openConnection();
-      print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı açıldı.');
+      final db = await database;
+      print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı kullanılıyor.');
 
       await db.transaction((txn) async {
         for (var sale in sales) {
@@ -712,7 +669,7 @@ class DatabaseHelper {
                 print('DB_HELPER_WARN: Ürün ($productId) stok güncelleme sırasında bulunamadı veya değer aynıydı.');
               }
             } else {
-              print('DB_HELPER_WARN: Ürün bulunamadı ($productId), stok güncellenemedi.'); } else { print('DB_HELPER_INFO: productId ($productId) veya quantitySold ($quantitySold) geçersiz olduğu için stok güncellenmedi.'); } } }); print('DB_HELPER_INFO: addSales transaction tamamlandı.'); } catch (e, stacktrace) { print('DB_HELPER_ERROR: addSales toplu işlemi sırasında hata: $e'); print('DB_HELPER_STACKTRACE: $stacktrace'); rethrow; // Hatayı yukarıya fırlat ki SalesService haberdar olsun } finally { // Veritabanı bağlantısını her durumda kapat if (db != null) { try { await db.close(); print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı kapatıldı.'); } catch (closeError) { print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError'); } } }
+              print('DB_HELPER_WARN: Ürün bulunamadı ($productId), stok güncellenemedi.'); } else { print('DB_HELPER_INFO: productId ($productId) veya quantitySold ($quantitySold) geçersiz olduğu için stok güncellenmedi.'); } } }); print('DB_HELPER_INFO: addSales transaction tamamlandı.'); } catch (e, stacktrace) { print('DB_HELPER_ERROR: addSales toplu işlemi sırasında hata: $e'); print('DB_HELPER_STACKTRACE: $stacktrace'); throw DatabaseException('Toplu satış eklenemedi', error: e, stackTrace: stacktrace); // Hatayı yukarıya fırlat ki SalesService haberdar olsun }
             } else {
               print('DB_HELPER_WARN: Ürün bulunamadı ($productId), stok güncellenemedi.');
             }
@@ -725,17 +682,7 @@ class DatabaseHelper {
     } catch (e, stacktrace) {
       print('DB_HELPER_ERROR: addSales toplu işlemi sırasında hata: $e');
       print('DB_HELPER_STACKTRACE: $stacktrace');
-      rethrow; // Hatayı yukarıya fırlat ki SalesService haberdar olsun
-    } finally {
-      // Veritabanı bağlantısını her durumda kapat
-      if (db != null) {
-        try {
-          await db.close();
-          print('DB_HELPER_INFO: addSales için toplu işlem bağlantısı kapatıldı.');
-        } catch (closeError) {
-          print('DB_HELPER_WARN: Veritabanı bağlantısı kapatılırken hata: $closeError');
-        }
-      }
+      throw DatabaseException('Toplu satış eklenemedi', error: e, stackTrace: stacktrace); // Hatayı yukarıya fırlat ki SalesService haberdar olsun
     }
     
     print('DB_HELPER_INFO: addSales tamamlandı. Tüm satışlar işlendi (veya hata oluştu).');
