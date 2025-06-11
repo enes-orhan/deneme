@@ -1,247 +1,275 @@
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import '../../../models/credit_entry.dart';
+import '../../../services/database/repositories/credit_repository.dart';
 import '../../../utils/logger.dart';
+import 'package:uuid/uuid.dart';
 
-/// Provider for credit book business logic and state management
-/// Extracted from the original 575-line CreditBookPage for better modularity
-class CreditProvider with ChangeNotifier {
-  List<CreditEntry> _entries = [];
+/// Provider for credit book management using SQLite repository
+/// Handles all credit/debt operations with proper state management
+class CreditProvider extends ChangeNotifier {
+  final CreditRepository _repository = CreditRepository();
+  
+  List<CreditEntry> _allEntries = [];
   List<CreditEntry> _filteredEntries = [];
-  String _searchQuery = '';
   bool _isLoading = false;
-  static const String _prefsKey = 'credit_entries';
+  String _searchQuery = '';
+  String _errorMessage = '';
+  bool _showPaidEntries = false;
 
   // Getters
-  List<CreditEntry> get entries => _entries;
+  List<CreditEntry> get allEntries => _allEntries;
   List<CreditEntry> get filteredEntries => _filteredEntries;
-  String get searchQuery => _searchQuery;
   bool get isLoading => _isLoading;
+  String get searchQuery => _searchQuery;
+  String get errorMessage => _errorMessage;
+  bool get showPaidEntries => _showPaidEntries;
 
-  /// Initialize the provider and load entries
+  /// Get total debt amount from unpaid entries
+  double get totalDebt {
+    return _allEntries
+        .where((entry) => entry.remainingDebt > 0)
+        .fold(0.0, (sum, entry) => sum + entry.remainingDebt);
+  }
+
+  /// Get count of unpaid entries
+  int get unpaidCount {
+    return _allEntries.where((entry) => entry.remainingDebt > 0).length;
+  }
+
+  /// Initialize provider and load data
   Future<void> initialize() async {
     await loadEntries();
   }
 
-  /// Load all credit entries from SharedPreferences
+  /// Load all credit entries from database
   Future<void> loadEntries() async {
-    _isLoading = true;
-    notifyListeners();
+    _setLoading(true);
+    _clearError();
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final data = prefs.getStringList(_prefsKey) ?? [];
-      
-      _entries = data.map((e) => CreditEntry.fromMap(jsonDecode(e))).toList();
-      _filteredEntries = List.from(_entries);
-      
-      _isLoading = false;
-      notifyListeners();
-      
-      Logger.success('Loaded ${_entries.length} credit entries', tag: 'CREDIT_PROVIDER');
+      _allEntries = await _repository.getAllEntries();
+      _applyFilters();
+      Logger.info('Loaded ${_allEntries.length} credit entries', tag: 'CREDIT_PROVIDER');
     } catch (e) {
-      _isLoading = false;
-      notifyListeners();
+      _setError('Kredi kayıtları yüklenirken hata oluştu: $e');
       Logger.error('Failed to load credit entries', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
+    } finally {
+      _setLoading(false);
     }
   }
 
-  /// Save all entries to SharedPreferences
-  Future<void> _saveEntries() async {
+  /// Add new credit entry
+  Future<bool> addEntry({
+    required String name,
+    required String surname,
+    required double initialDebt,
+  }) async {
+    _clearError();
+
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final data = _entries.map((e) => jsonEncode(e.toMap())).toList();
-      await prefs.setStringList(_prefsKey, data);
-      Logger.success('Saved ${_entries.length} credit entries', tag: 'CREDIT_PROVIDER');
-    } catch (e) {
-      Logger.error('Failed to save credit entries', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
-    }
-  }
+      final entry = CreditEntry(
+        id: const Uuid().v4(),
+        name: name.trim(),
+        surname: surname.trim(),
+        remainingDebt: initialDebt,
+        lastPaymentAmount: 0.0,
+        lastPaymentDate: null,
+      );
 
-  /// Filter entries by search query (name + surname)
-  void filterEntries(String query) {
-    _searchQuery = query;
-    
-    if (query.isEmpty) {
-      _filteredEntries = List.from(_entries);
-    } else {
-      _filteredEntries = _entries.where((entry) {
-        final name = '${entry.name} ${entry.surname}'.toLowerCase();
-        return name.contains(query.toLowerCase());
-      }).toList();
-    }
-    
-    notifyListeners();
-  }
-
-  /// Add a new credit entry
-  Future<void> addEntry(CreditEntry entry) async {
-    try {
-      _entries.add(entry);
-      await _saveEntries();
-      filterEntries(_searchQuery); // Reapply current filter
-      Logger.success('Credit entry added: ${entry.name} ${entry.surname}', tag: 'CREDIT_PROVIDER');
+      final success = await _repository.insert(entry);
+      if (success) {
+        await loadEntries(); // Refresh data
+        Logger.success('Credit entry added: $name $surname', tag: 'CREDIT_PROVIDER');
+        return true;
+      } else {
+        _setError('Kredi kaydı eklenirken hata oluştu');
+        return false;
+      }
     } catch (e) {
+      _setError('Kredi kaydı eklenirken hata oluştu: $e');
       Logger.error('Failed to add credit entry', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
+      return false;
     }
   }
 
-  /// Update an existing credit entry
-  Future<void> updateEntry(CreditEntry updatedEntry) async {
+  /// Add payment to reduce debt
+  Future<bool> addPayment(String entryId, double paymentAmount) async {
+    _clearError();
+
+    if (paymentAmount <= 0) {
+      _setError('Ödeme miktarı sıfırdan büyük olmalıdır');
+      return false;
+    }
+
     try {
-      final index = _entries.indexWhere((entry) => entry.id == updatedEntry.id);
-      if (index != -1) {
-        _entries[index] = updatedEntry;
-        await _saveEntries();
-        filterEntries(_searchQuery); // Reapply current filter
-        Logger.success('Credit entry updated: ${updatedEntry.name} ${updatedEntry.surname}', tag: 'CREDIT_PROVIDER');
+      final success = await _repository.addPayment(entryId, paymentAmount);
+      if (success) {
+        await loadEntries(); // Refresh data
+        Logger.success('Payment added: $paymentAmount', tag: 'CREDIT_PROVIDER');
+        return true;
       } else {
-        throw Exception('Entry not found');
+        _setError('Ödeme kaydedilirken hata oluştu');
+        return false;
       }
     } catch (e) {
-      Logger.error('Failed to update credit entry', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
-    }
-  }
-
-  /// Delete a credit entry
-  Future<void> deleteEntry(String entryId) async {
-    try {
-      _entries.removeWhere((entry) => entry.id == entryId);
-      await _saveEntries();
-      filterEntries(_searchQuery); // Reapply current filter
-      Logger.success('Credit entry deleted', tag: 'CREDIT_PROVIDER');
-    } catch (e) {
-      Logger.error('Failed to delete credit entry', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
-    }
-  }
-
-  /// Add payment to a customer (reduce their debt)
-  Future<void> addPayment(String entryId, double paymentAmount, DateTime paymentDate) async {
-    try {
-      final index = _entries.indexWhere((entry) => entry.id == entryId);
-      if (index != -1) {
-        final entry = _entries[index];
-        final updatedEntry = entry.copyWith(
-          remainingDebt: entry.remainingDebt - paymentAmount,
-          lastPaymentAmount: paymentAmount,
-          lastPaymentDate: paymentDate,
-        );
-        
-        _entries[index] = updatedEntry;
-        await _saveEntries();
-        filterEntries(_searchQuery); // Reapply current filter
-        
-        Logger.success('Payment added: ${paymentAmount}TL for ${entry.name} ${entry.surname}', tag: 'CREDIT_PROVIDER');
-      } else {
-        throw Exception('Entry not found');
-      }
-    } catch (e) {
+      _setError('Ödeme kaydedilirken hata oluştu: $e');
       Logger.error('Failed to add payment', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
+      return false;
+    }
+  }
+
+  /// Delete credit entry
+  Future<bool> deleteEntry(String entryId) async {
+    _clearError();
+
+    try {
+      final success = await _repository.delete(entryId);
+      if (success) {
+        await loadEntries(); // Refresh data
+        Logger.success('Credit entry deleted', tag: 'CREDIT_PROVIDER');
+        return true;
+      } else {
+        _setError('Kredi kaydı silinirken hata oluştu');
+        return false;
+      }
+    } catch (e) {
+      _setError('Kredi kaydı silinirken hata oluştu: $e');
+      Logger.error('Failed to delete credit entry', tag: 'CREDIT_PROVIDER', error: e);
+      return false;
+    }
+  }
+
+  /// Search entries by name
+  void searchEntries(String query) {
+    _searchQuery = query.trim().toLowerCase();
+    _applyFilters();
+    Logger.info('Searching entries with query: $_searchQuery', tag: 'CREDIT_PROVIDER');
+  }
+
+  /// Toggle between showing all entries or only unpaid entries
+  void toggleShowPaidEntries() {
+    _showPaidEntries = !_showPaidEntries;
+    _applyFilters();
+    Logger.info('Toggled show paid entries: $_showPaidEntries', tag: 'CREDIT_PROVIDER');
+  }
+
+  /// Clear search query
+  void clearSearch() {
+    _searchQuery = '';
+    _applyFilters();
+  }
+
+  /// Delete all paid entries (debt = 0)
+  Future<bool> deletePaidEntries() async {
+    _clearError();
+
+    try {
+      final deletedCount = await _repository.deletePaidEntries();
+      if (deletedCount > 0) {
+        await loadEntries(); // Refresh data
+        Logger.success('Deleted $deletedCount paid entries', tag: 'CREDIT_PROVIDER');
+        return true;
+      } else {
+        _setError('Silinecek ödenmiş kayıt bulunamadı');
+        return false;
+      }
+    } catch (e) {
+      _setError('Ödenmiş kayıtlar silinirken hata oluştu: $e');
+      Logger.error('Failed to delete paid entries', tag: 'CREDIT_PROVIDER', error: e);
+      return false;
+    }
+  }
+
+  /// Get credit statistics
+  Future<Map<String, dynamic>> getStatistics() async {
+    try {
+      return await _repository.getStatistics();
+    } catch (e) {
+      Logger.error('Failed to get credit statistics', tag: 'CREDIT_PROVIDER', error: e);
+      return {
+        'totalEntries': 0,
+        'debtEntries': 0,
+        'paidEntries': 0,
+        'totalDebt': 0.0,
+        'averageDebt': 0.0,
+      };
     }
   }
 
   /// Import entries from CSV data
-  Future<void> importFromCSV(List<Map<String, dynamic>> csvData) async {
+  Future<bool> importFromCsv(List<CreditEntry> entries) async {
+    _clearError();
+
     try {
-      final newEntries = <CreditEntry>[];
-      
-      for (var row in csvData) {
-        try {
-          final entry = CreditEntry.fromMap(row);
-          newEntries.add(entry);
-        } catch (e) {
-          Logger.warn('Skipped invalid CSV row: $row', tag: 'CREDIT_PROVIDER');
-        }
+      final success = await _repository.insertBulk(entries);
+      if (success) {
+        await loadEntries(); // Refresh data
+        Logger.success('Imported ${entries.length} credit entries', tag: 'CREDIT_PROVIDER');
+        return true;
+      } else {
+        _setError('CSV verisi içe aktarılırken hata oluştu');
+        return false;
       }
-      
-      _entries.addAll(newEntries);
-      await _saveEntries();
-      filterEntries(_searchQuery); // Reapply current filter
-      
-      Logger.success('Imported ${newEntries.length} credit entries from CSV', tag: 'CREDIT_PROVIDER');
     } catch (e) {
-      Logger.error('Failed to import credit entries from CSV', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
+      _setError('CSV verisi içe aktarılırken hata oluştu: $e');
+      Logger.error('Failed to import CSV data', tag: 'CREDIT_PROVIDER', error: e);
+      return false;
     }
   }
 
-  /// Export entries to CSV format
-  List<Map<String, dynamic>> exportToCSV() {
-    return _entries.map((entry) => entry.toMap()).toList();
+  /// Export entries to CSV data
+  List<CreditEntry> exportToCsv() {
+    return List.from(_allEntries);
   }
 
-  /// Get total debt amount
-  double getTotalDebt() {
-    return _entries.fold(0.0, (sum, entry) => sum + entry.remainingDebt);
+  /// Apply search and filter logic
+  void _applyFilters() {
+    List<CreditEntry> filtered = List.from(_allEntries);
+
+    // Filter by paid/unpaid status
+    if (!_showPaidEntries) {
+      filtered = filtered.where((entry) => entry.remainingDebt > 0).toList();
+    }
+
+    // Apply search filter
+    if (_searchQuery.isNotEmpty) {
+      filtered = filtered.where((entry) {
+        final nameMatch = entry.name.toLowerCase().contains(_searchQuery);
+        final surnameMatch = entry.surname.toLowerCase().contains(_searchQuery);
+        return nameMatch || surnameMatch;
+      }).toList();
+    }
+
+    // Sort by name
+    filtered.sort((a, b) {
+      final nameCompare = a.name.compareTo(b.name);
+      if (nameCompare != 0) return nameCompare;
+      return a.surname.compareTo(b.surname);
+    });
+
+    _filteredEntries = filtered;
+    notifyListeners();
   }
 
-  /// Get entries with debt (remaining debt > 0)
-  List<CreditEntry> getDebtEntries() {
-    return _entries.where((entry) => entry.remainingDebt > 0).toList();
-  }
-
-  /// Get entries without debt (remaining debt = 0)
-  List<CreditEntry> getPaidEntries() {
-    return _entries.where((entry) => entry.remainingDebt <= 0).toList();
-  }
-
-  /// Get credit statistics
-  Map<String, dynamic> getCreditStatistics() {
-    final totalEntries = _entries.length;
-    final debtEntries = getDebtEntries().length;
-    final paidEntries = getPaidEntries().length;
-    final totalDebt = getTotalDebt();
-    final averageDebt = debtEntries > 0 ? totalDebt / debtEntries : 0.0;
-
-    return {
-      'totalEntries': totalEntries,
-      'debtEntries': debtEntries,
-      'paidEntries': paidEntries,
-      'totalDebt': totalDebt,
-      'averageDebt': averageDebt,
-    };
-  }
-
-  /// Search customers by name
-  List<CreditEntry> searchCustomers(String query) {
-    if (query.isEmpty) return _entries;
-    
-    return _entries.where((entry) {
-      final fullName = '${entry.name} ${entry.surname}'.toLowerCase();
-      return fullName.contains(query.toLowerCase());
-    }).toList();
-  }
-
-  /// Get customer by ID
-  CreditEntry? getCustomerById(String id) {
-    try {
-      return _entries.firstWhere((entry) => entry.id == id);
-    } catch (e) {
-      return null;
+  /// Set loading state
+  void _setLoading(bool loading) {
+    if (_isLoading != loading) {
+      _isLoading = loading;
+      notifyListeners();
     }
   }
 
-  /// Clean up paid entries (remove entries with 0 debt)
-  Future<void> cleanupPaidEntries() async {
-    try {
-      final originalCount = _entries.length;
-      _entries.removeWhere((entry) => entry.remainingDebt <= 0);
-      
-      await _saveEntries();
-      filterEntries(_searchQuery); // Reapply current filter
-      
-      final removedCount = originalCount - _entries.length;
-      Logger.success('Cleaned up $removedCount paid entries', tag: 'CREDIT_PROVIDER');
-    } catch (e) {
-      Logger.error('Failed to cleanup paid entries', tag: 'CREDIT_PROVIDER', error: e);
-      rethrow;
+  /// Set error message
+  void _setError(String message) {
+    _errorMessage = message;
+    notifyListeners();
+  }
+
+  /// Clear error message
+  void _clearError() {
+    if (_errorMessage.isNotEmpty) {
+      _errorMessage = '';
+      notifyListeners();
     }
   }
 } 

@@ -13,7 +13,7 @@ class DatabaseConnection {
 
   static Database? _database;
   static const String _dbName = 'kiyafet_app.db';
-  static const int _dbVersion = 2;
+  static const int _dbVersion = 3;
   static String? _dbPath;
 
   /// Get the singleton database instance
@@ -205,14 +205,45 @@ class DatabaseConnection {
   Future<void> _createTablesV2(Database db) async {
     await _createTablesV1(db);
     
+    // Add new credit entries table
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS credit_entries (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        surname TEXT NOT NULL,
+        remaining_debt REAL NOT NULL DEFAULT 0.0,
+        last_payment_amount REAL NOT NULL DEFAULT 0.0,
+        last_payment_date TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    
+    // Add new income/expense entries table
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS income_expense_entries (
+        id TEXT PRIMARY KEY,
+        description TEXT NOT NULL,
+        amount REAL NOT NULL,
+        type TEXT NOT NULL,
+        date TEXT NOT NULL,
+        category TEXT NOT NULL,
+        is_auto_generated INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    
     // Add indexes for better performance
     await db.execute('CREATE INDEX idx_products_barcode ON products(barcode)');
     await db.execute('CREATE INDEX idx_sales_date ON sales(date)');
     await db.execute('CREATE INDEX idx_sales_product ON sales(productId)');
     await db.execute('CREATE INDEX idx_daily_summaries_date ON daily_summaries(date)');
     await db.execute('CREATE INDEX idx_expenses_date ON expenses(date)');
+    await db.execute('CREATE INDEX idx_credit_name ON credit_entries(name, surname)');
+    await db.execute('CREATE INDEX idx_income_expense_type_date ON income_expense_entries(type, date)');
     
-    Logger.info('Version 2 database schema created with indexes', tag: 'DB_CONNECTION');
+    Logger.info('Version 2 database schema created with new tables and indexes', tag: 'DB_CONNECTION');
   }
 
   /// Handle database upgrades
@@ -228,6 +259,43 @@ class DatabaseConnection {
       await db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
       
       Logger.info('Database upgraded to version 2 with indexes', tag: 'DB_CONNECTION');
+    }
+    
+    if (oldVersion < 3) {
+      // Add credit entries table
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS credit_entries (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          surname TEXT NOT NULL,
+          remaining_debt REAL NOT NULL DEFAULT 0.0,
+          last_payment_amount REAL NOT NULL DEFAULT 0.0,
+          last_payment_date TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      
+      // Add income/expense entries table
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS income_expense_entries (
+          id TEXT PRIMARY KEY,
+          description TEXT NOT NULL,
+          amount REAL NOT NULL,
+          type TEXT NOT NULL,
+          date TEXT NOT NULL,
+          category TEXT NOT NULL,
+          is_auto_generated INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      
+      // Add new indexes
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_credit_name ON credit_entries(name, surname)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_income_expense_type_date ON income_expense_entries(type, date)');
+      
+      Logger.info('Database upgraded to version 3 with new tables', tag: 'DB_CONNECTION');
     }
   }
 

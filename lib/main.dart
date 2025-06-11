@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'dart:io' show Platform;
+import 'dart:convert';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +12,12 @@ import 'package:flutter/services.dart';
 import 'constants/app_constants.dart';
 import 'services/service_locator.dart';
 import 'services/auth_service.dart';
+import 'services/storage_service.dart';
 import 'services/database_helper.dart';
+import 'services/database/repositories/credit_repository.dart';
+import 'services/database/repositories/income_expense_repository.dart';
+import 'models/credit_entry.dart';
+import 'models/income_expense_entry.dart';
 import 'screens/home_page.dart';
 import 'screens/login_page.dart';
 import 'utils/logger.dart';
@@ -140,16 +147,82 @@ Future<void> _migrateToSQLite() async {
   try {
     Logger.info('Verileri SQLite veritabanına aktarma başlatılıyor...', tag: 'APP');
     
-    // Service locator'dan servisleri al
-    final storageService = getIt<StorageService>();
+    final prefs = await SharedPreferences.getInstance();
+    bool migrationNeeded = prefs.getBool('needs_migration') ?? true;
     
-    // Ürünleri ve satışları almaya çalış
-    await storageService.getProducts();
-    await storageService.getSales();
+    if (!migrationNeeded) {
+      Logger.info('Veri aktarımı daha önce tamamlanmış', tag: 'APP');
+      return;
+    }
+
+    // Credit entries migration
+    await _migrateCreditEntries(prefs);
+    
+    // Income/expense entries migration
+    await _migrateIncomeExpenseEntries(prefs);
+    
+    // Clean up old data
+    await _cleanupOldData(prefs);
+    
+    // Mark migration as completed
+    await prefs.setBool('needs_migration', false);
     
     Logger.success('Veriler başarıyla SQLite veritabanına aktarıldı', tag: 'APP');
   } catch (e, stackTrace) {
     Logger.error('Veri aktarımında hata', tag: 'APP', error: e, stackTrace: stackTrace);
+  }
+}
+
+/// Migrate credit entries from SharedPreferences to SQLite
+Future<void> _migrateCreditEntries(SharedPreferences prefs) async {
+  try {
+    final creditData = prefs.getStringList('credit_entries') ?? [];
+    if (creditData.isEmpty) return;
+
+    final creditEntries = creditData
+        .map((data) => CreditEntry.fromMap(jsonDecode(data)))
+        .toList();
+
+    // Use repository to insert migrated data
+    final repository = CreditRepository();
+    await repository.insertBulk(creditEntries);
+
+    Logger.success('${creditEntries.length} kredi kaydı aktarıldı', tag: 'APP');
+  } catch (e) {
+    Logger.error('Kredi kayıtları aktarılamadı', tag: 'APP', error: e);
+  }
+}
+
+/// Migrate income/expense entries from SharedPreferences to SQLite
+Future<void> _migrateIncomeExpenseEntries(SharedPreferences prefs) async {
+  try {
+    final entriesData = prefs.getStringList('income_expense_entries') ?? [];
+    if (entriesData.isEmpty) return;
+
+    final entries = entriesData
+        .map((data) => IncomeExpenseEntry.fromMap(jsonDecode(data)))
+        .toList();
+
+    // Use repository to insert migrated data
+    final repository = IncomeExpenseRepository();
+    await repository.insertBulk(entries);
+
+    Logger.success('${entries.length} gelir/gider kaydı aktarıldı', tag: 'APP');
+  } catch (e) {
+    Logger.error('Gelir/gider kayıtları aktarılamadı', tag: 'APP', error: e);
+  }
+}
+
+/// Clean up old data from SharedPreferences
+Future<void> _cleanupOldData(SharedPreferences prefs) async {
+  try {
+    // Remove old data keys (keep user settings)
+    await prefs.remove('credit_entries');
+    await prefs.remove('income_expense_entries');
+    
+    Logger.info('Eski veriler temizlendi', tag: 'APP');
+  } catch (e) {
+    Logger.error('Eski veriler temizlenemedi', tag: 'APP', error: e);
   }
 }
 
