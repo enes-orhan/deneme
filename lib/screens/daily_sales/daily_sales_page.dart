@@ -13,7 +13,7 @@ import 'components/day_management_widget.dart';
 import '../../utils/csv_export_util.dart';
 
 /// Refactored daily sales page with modular components
-/// TODO: Migrate to Repository pattern - currently using StorageService
+/// Successfully migrated to Repository pattern for data consistency
 class DailySalesPage extends StatefulWidget {
   const DailySalesPage({
     Key? key,
@@ -173,7 +173,7 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
                   Expanded(
                     child: CustomTextField(
                       controller: _barcodeController,
-                      labelText: 'Barkod',
+                      label: 'Barkod',
                       onChanged: _onBarcodeChanged,
                     ),
                   ),
@@ -213,7 +213,7 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
               // Quantity input
               CustomTextField(
                 controller: _quantityController,
-                labelText: 'Adet',
+                label: 'Adet',
                 keyboardType: TextInputType.number,
                 validator: (value) {
                   if (value == null || value.isEmpty) {
@@ -338,7 +338,7 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
                   Expanded(
                     child: Text(
                       'Tarih: ${DateFormat('dd/MM/yyyy').format(provider.selectedDate)}',
-                      style: AppTextStyles.heading3,
+                      style: AppTextStyles.heading2,
                     ),
                   ),
                   TextButton.icon(

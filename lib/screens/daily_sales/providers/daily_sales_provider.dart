@@ -3,16 +3,19 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:get_it/get_it.dart';
 import '../../../models/product.dart';
-import '../../../services/storage_service.dart';
+import '../../../services/database/repositories/product_repository.dart';
+import '../../../services/database/repositories/sales_repository.dart';
 import '../../../utils/logger.dart';
 
 /// Provider for daily sales page business logic and state management
-/// TODO: Migrate from StorageService to Repository pattern
+/// Migrated to Repository pattern for data consistency
 class DailySalesProvider with ChangeNotifier {
-  late final StorageService _storageService;
+  late final ProductRepository _productRepository;
+  late final SalesRepository _salesRepository;
 
   DailySalesProvider() {
-    _storageService = GetIt.instance<StorageService>();
+    _productRepository = GetIt.instance<ProductRepository>();
+    _salesRepository = GetIt.instance<SalesRepository>();
   }
 
   // State variables
@@ -164,40 +167,55 @@ class DailySalesProvider with ChangeNotifier {
     }
   }
 
-  /// Load data in background
+  /// Load data in background using Repository pattern
   Future<Map<String, dynamic>> _loadDataInBackground(DateTime date) async {
     try {
-      // Load all data in parallel
-      final results = await Future.wait([
-        _storageService.getSales(),
-        _storageService.getSalesHistory(),
-        _storageService.getProducts(),
-        _storageService.getDailySales(date),
-        _storageService.getDailySummary(date),
-        _storageService.getTotalAmount(date),
-        _storageService.getTotalCost(date),
-        _storageService.getTotalProfit(date),
-        _storageService.getTotalSales(date),
-        _storageService.getTotalProducts(date),
-        _storageService.getOpeningTime(date),
-      ]);
+      // Load data from repositories
+      final allSales = await _salesRepository.getAll();
+      final products = await _productRepository.getAll();
+      final dailySales = await _salesRepository.getByDate(date);
+      
+      // Load daily summary from SharedPreferences (simple data)
+      final prefs = await SharedPreferences.getInstance();
+      final dateKey = DateFormat('yyyy-MM-dd').format(date);
+      final summaryJson = prefs.getString('daily_summary_$dateKey');
+      final openingTimeMillis = prefs.getInt('opening_time_$dateKey');
+      
+      // Calculate totals from sales data
+      double totalAmount = 0;
+      double totalCost = 0;
+      int totalSales = 0;
+      int totalProducts = 0;
+      
+      for (var sale in dailySales) {
+        if (sale['type'] == 'sale') {
+          final quantity = _parseIntSafely(sale['quantity']);
+          final price = _parseDoubleSafely(sale['price']);
+          final cost = _parseDoubleSafely(sale['finalCost']);
+          
+          totalSales++;
+          totalProducts += quantity;
+          totalAmount += price * quantity;
+          totalCost += cost * quantity;
+        }
+      }
+      
+      final totalProfit = totalAmount - totalCost;
 
       return {
-        'sales': results[0],
-        'history': results[1],
-        'products': results[2],
-        'dailySales': results[3],
-        'summary': results[4],
-        'totalAmount': results[5],
-        'totalCost': results[6],
-        'totalProfit': results[7],
-        'totalSales': results[8],
-        'totalProducts': results[9],
-        'openingTime': results[10] is int 
-            ? DateTime.fromMillisecondsSinceEpoch(results[10] as int)
-            : results[10] is String 
-                ? DateTime.tryParse(results[10] as String) 
-                : null,
+        'sales': allSales,
+        'history': allSales,
+        'products': products,
+        'dailySales': dailySales,
+        'summary': summaryJson,
+        'totalAmount': totalAmount,
+        'totalCost': totalCost,
+        'totalProfit': totalProfit,
+        'totalSales': totalSales,
+        'totalProducts': totalProducts,
+        'openingTime': openingTimeMillis != null 
+            ? DateTime.fromMillisecondsSinceEpoch(openingTimeMillis)
+            : null,
       };
     } catch (e) {
       Logger.error('Background data loading failed', tag: 'SALES_PROVIDER', error: e);
@@ -289,9 +307,9 @@ class DailySalesProvider with ChangeNotifier {
       // Update product stock
       final updatedProduct = product.copyWith(quantity: product.quantity - quantity);
       
-      // Update database
-      await _storageService.updateProduct(updatedProduct);
-      await _storageService.addSales([sale]);
+      // Update database using repositories
+      await _productRepository.update(updatedProduct);
+      await _salesRepository.create(sale);
 
       // Update local state
       final productIndex = _products.indexWhere((p) => p.id == product.id);
@@ -338,11 +356,14 @@ class DailySalesProvider with ChangeNotifier {
     _totalProfit = _totalAmount - _totalCost;
   }
 
-  /// Save daily summary
+  /// Save daily summary using SharedPreferences for simple data
   Future<void> _saveDailySummary() async {
     try {
-      final summary = {
-        'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
+      final prefs = await SharedPreferences.getInstance();
+      final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      
+      final summaryJson = {
+        'date': dateKey,
         'totalSales': _totalSales,
         'totalProducts': _totalProducts,
         'totalAmount': _totalAmount,
@@ -352,7 +373,7 @@ class DailySalesProvider with ChangeNotifier {
         'closingTime': DateTime.now().toIso8601String(),
       };
       
-      await _storageService.saveDailySummary(summary);
+      await prefs.setString('daily_summary_$dateKey', summaryJson.toString());
       Logger.info('Daily summary saved', tag: 'SALES_PROVIDER');
     } catch (e) {
       Logger.error('Failed to save daily summary', tag: 'SALES_PROVIDER', error: e);
