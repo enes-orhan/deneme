@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
+import 'package:get_it/get_it.dart';
 import '../../../models/income_expense_entry.dart';
+import '../../../services/database/repositories/income_expense_repository.dart';
 import '../../../utils/logger.dart';
 
 /// Provider for balance and financial management
-/// Extracted from the original income_expense_balance_page.dart for better modularity
+/// Updated to use Repository pattern instead of SharedPreferences for data consistency
 class BalanceProvider with ChangeNotifier {
+  late final IncomeExpenseRepository _repository;
   List<IncomeExpenseEntry> _entries = [];
   bool _isLoading = false;
-  static const String _prefsKey = 'income_expense_entries';
+
+  BalanceProvider() {
+    _repository = GetIt.instance<IncomeExpenseRepository>();
+  }
 
   // Getters
   List<IncomeExpenseEntry> get entries => _entries;
@@ -20,25 +24,22 @@ class BalanceProvider with ChangeNotifier {
     await loadEntries();
   }
 
-  /// Load all entries from SharedPreferences
+  /// Load all entries from SQLite Repository
   Future<void> loadEntries() async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final data = prefs.getStringList(_prefsKey) ?? [];
-      
-      _entries = data.map((e) => IncomeExpenseEntry.fromMap(jsonDecode(e))).toList();
+      _entries = await _repository.getAllEntries();
       
       _isLoading = false;
       notifyListeners();
       
-      Logger.success('Loaded ${_entries.length} financial entries', tag: 'BALANCE_PROVIDER');
+      Logger.success('Loaded ${_entries.length} financial entries from SQLite', tag: 'BALANCE_PROVIDER');
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      Logger.error('Failed to load financial entries', tag: 'BALANCE_PROVIDER', error: e);
+      Logger.error('Failed to load financial entries from repository', tag: 'BALANCE_PROVIDER', error: e);
       rethrow;
     }
   }
