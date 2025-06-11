@@ -13,7 +13,7 @@ class DatabaseConnection {
 
   static Database? _database;
   static const String _dbName = 'kiyafet_app.db';
-  static const int _dbVersion = 4;
+  static const int _dbVersion = 5;
   static String? _dbPath;
 
   /// Get the singleton database instance
@@ -170,7 +170,6 @@ class DatabaseConnection {
         price REAL NOT NULL,
         finalCost REAL,
         profit REAL,
-        date TEXT NOT NULL,
         timestamp TEXT NOT NULL,
         type TEXT DEFAULT 'sale'
       )
@@ -253,7 +252,7 @@ class DatabaseConnection {
     
     // Add indexes for better performance
     await db.execute('CREATE INDEX idx_products_barcode ON products(barcode)');
-    await db.execute('CREATE INDEX idx_sales_date ON sales(date)');
+    await db.execute('CREATE INDEX idx_sales_timestamp ON sales(timestamp)');
     await db.execute('CREATE INDEX idx_sales_product ON sales(productId)');
     await db.execute('CREATE INDEX idx_daily_summaries_date ON daily_summaries(date)');
     await db.execute('CREATE INDEX idx_expenses_date ON expenses(date)');
@@ -271,7 +270,7 @@ class DatabaseConnection {
     if (oldVersion < 2) {
       // Add indexes for version 2
       await db.execute('CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)');
-      await db.execute('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_sales_timestamp ON sales(timestamp)');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_sales_product ON sales(productId)');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_daily_summaries_date ON daily_summaries(date)');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
@@ -338,6 +337,49 @@ class DatabaseConnection {
       await db.execute('CREATE INDEX IF NOT EXISTS idx_daily_sessions_date ON daily_sessions(date)');
       
       Logger.info('Database upgraded to version 4 with daily_sessions table', tag: 'DB_CONNECTION');
+    }
+    
+    if (oldVersion < 5) {
+      // SCHEMA OPTIMIZATION: Remove redundant date column from sales table
+      // Keep only timestamp column to prevent data duplication
+      Logger.info('Migrating sales table to remove redundant date column', tag: 'DB_CONNECTION');
+      
+      // Create new sales table without date column
+      await db.execute('''
+        CREATE TABLE sales_new (
+          id TEXT PRIMARY KEY,
+          productId TEXT,
+          productName TEXT NOT NULL,
+          brand TEXT NOT NULL,
+          model TEXT NOT NULL,
+          color TEXT NOT NULL,
+          size TEXT NOT NULL,
+          quantity INTEGER NOT NULL,
+          price REAL NOT NULL,
+          finalCost REAL,
+          profit REAL,
+          timestamp TEXT NOT NULL,
+          type TEXT DEFAULT 'sale'
+        )
+      ''');
+      
+      // Copy data from old table (keeping only timestamp, removing date)
+      await db.execute('''
+        INSERT INTO sales_new 
+        SELECT id, productId, productName, brand, model, color, size, 
+               quantity, price, finalCost, profit, timestamp, type 
+        FROM sales
+      ''');
+      
+      // Drop old table and rename new one
+      await db.execute('DROP TABLE sales');
+      await db.execute('ALTER TABLE sales_new RENAME TO sales');
+      
+      // Update index to use timestamp instead of date
+      await db.execute('DROP INDEX IF EXISTS idx_sales_date');
+      await db.execute('CREATE INDEX idx_sales_timestamp ON sales(timestamp)');
+      
+      Logger.info('Database upgraded to version 5: sales table optimized, redundant date column removed', tag: 'DB_CONNECTION');
     }
   }
 

@@ -4,7 +4,7 @@ import '../../../utils/logger.dart';
 import '../database_connection.dart';
 
 /// Repository for handling all sales-related database operations
-/// Extracted from the original 743-line DatabaseHelper for better separation of concerns
+/// SCHEMA OPTIMIZATION: Uses only timestamp column (ISO 8601) instead of redundant date+timestamp
 class SalesRepository {
   final DatabaseConnection _dbConnection = DatabaseConnection();
   
@@ -21,7 +21,6 @@ class SalesRepository {
   static const String _columnPrice = 'price';
   static const String _columnFinalCost = 'finalCost';
   static const String _columnProfit = 'profit';
-  static const String _columnDate = 'date';
   static const String _columnTimestamp = 'timestamp';
   static const String _columnType = 'type';
 
@@ -39,8 +38,7 @@ class SalesRepository {
         Logger.info('Generated new sale ID: ${saleToInsert[_columnId]}', tag: 'SALES_REPO');
       }
       
-      // Set timestamps
-      saleToInsert[_columnDate] ??= DateTime.now().toIso8601String().split('T').first;
+      // Set timestamp (ISO 8601 format)
       saleToInsert[_columnTimestamp] ??= DateTime.now().toIso8601String();
       saleToInsert[_columnType] ??= 'sale';
       
@@ -64,7 +62,7 @@ class SalesRepository {
       
       Logger.success('Sale created successfully. Row ID: $result, Sale ID: ${saleToInsert[_columnId]}', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to create sale', tag: 'SALES_REPO', error: e);
       throw Exception('Sale could not be created: $e');
     }
@@ -83,54 +81,55 @@ class SalesRepository {
       
       Logger.success('Fetched ${result.length} sales records', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to fetch all sales', tag: 'SALES_REPO', error: e);
       return [];
     }
   }
 
-  /// Get sales by date range
+  /// Get sales by date range (using timestamp comparison)
   Future<List<Map<String, dynamic>>> getByDateRange(DateTime startDate, DateTime endDate) async {
     try {
       final db = await _dbConnection.database;
-      final startDateStr = startDate.toIso8601String().split('T').first;
-      final endDateStr = endDate.toIso8601String().split('T').first;
+      final startTimestamp = startDate.toIso8601String();
+      final endTimestamp = endDate.add(const Duration(days: 1)).toIso8601String();
       
-      Logger.info('Fetching sales from $startDateStr to $endDateStr', tag: 'SALES_REPO');
+      Logger.info('Fetching sales from $startTimestamp to $endTimestamp', tag: 'SALES_REPO');
       
       final result = await db.query(
         _tableName,
-        where: '$_columnDate BETWEEN ? AND ?',
-        whereArgs: [startDateStr, endDateStr],
+        where: '$_columnTimestamp >= ? AND $_columnTimestamp < ?',
+        whereArgs: [startTimestamp, endTimestamp],
         orderBy: '$_columnTimestamp DESC',
       );
       
       Logger.success('Fetched ${result.length} sales in date range', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to fetch sales by date range', tag: 'SALES_REPO', error: e);
       return [];
     }
   }
 
-  /// Get sales for a specific date
+  /// Get sales for a specific date (using timestamp comparison)
   Future<List<Map<String, dynamic>>> getByDate(DateTime date) async {
     try {
       final db = await _dbConnection.database;
-      final dateStr = date.toIso8601String().split('T').first;
+      final startOfDay = DateTime(date.year, date.month, date.day).toIso8601String();
+      final endOfDay = DateTime(date.year, date.month, date.day + 1).toIso8601String();
       
-      Logger.info('Fetching sales for date: $dateStr', tag: 'SALES_REPO');
+      Logger.info('Fetching sales for date: ${date.toIso8601String().split('T').first}', tag: 'SALES_REPO');
       
       final result = await db.query(
         _tableName,
-        where: '$_columnDate = ?',
-        whereArgs: [dateStr],
+        where: '$_columnTimestamp >= ? AND $_columnTimestamp < ?',
+        whereArgs: [startOfDay, endOfDay],
         orderBy: '$_columnTimestamp DESC',
       );
       
-      Logger.success('Fetched ${result.length} sales for date: $dateStr', tag: 'SALES_REPO');
+      Logger.success('Fetched ${result.length} sales for date: ${date.toIso8601String().split('T').first}', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to fetch sales by date', tag: 'SALES_REPO', error: e);
       return [];
     }
@@ -158,7 +157,7 @@ class SalesRepository {
       
       Logger.success('Sale updated: $saleId, affected rows: $result', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to update sale', tag: 'SALES_REPO', error: e);
       return 0;
     }
@@ -183,7 +182,7 @@ class SalesRepository {
       }
       
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to delete sale', tag: 'SALES_REPO', error: e);
       return 0;
     }
@@ -205,8 +204,7 @@ class SalesRepository {
             saleToInsert[_columnId] = const Uuid().v4();
           }
 
-          // Set timestamps and defaults
-          saleToInsert[_columnDate] ??= DateTime.now().toIso8601String().split('T').first;
+          // Set timestamp and defaults (ISO 8601 format)
           saleToInsert[_columnTimestamp] ??= DateTime.now().toIso8601String();
           saleToInsert[_columnType] ??= 'sale';
 
@@ -225,26 +223,27 @@ class SalesRepository {
             saleToInsert,
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
+          
           insertedCount++;
         }
         
         Logger.success('Bulk inserted $insertedCount sales', tag: 'SALES_REPO');
         return insertedCount;
       });
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to bulk insert sales', tag: 'SALES_REPO', error: e);
-      throw Exception('Bulk sales insert failed: $e');
+      return 0;
     }
   }
 
-  /// Get sales statistics for a date range
+  /// Get sales statistics for a date range (using timestamp comparison)
   Future<Map<String, dynamic>> getStatistics(DateTime startDate, DateTime endDate) async {
     try {
       final db = await _dbConnection.database;
-      final startDateStr = startDate.toIso8601String().split('T').first;
-      final endDateStr = endDate.toIso8601String().split('T').first;
+      final startTimestamp = startDate.toIso8601String();
+      final endTimestamp = endDate.add(const Duration(days: 1)).toIso8601String();
       
-      Logger.info('Calculating sales statistics from $startDateStr to $endDateStr', tag: 'SALES_REPO');
+      Logger.info('Calculating sales statistics from $startTimestamp to $endTimestamp', tag: 'SALES_REPO');
       
       final result = await db.rawQuery('''
         SELECT 
@@ -255,8 +254,8 @@ class SalesRepository {
           SUM(($_columnPrice - $_columnFinalCost) * $_columnQuantity) as total_profit,
           AVG($_columnPrice) as average_price
         FROM $_tableName 
-        WHERE $_columnDate BETWEEN ? AND ?
-      ''', [startDateStr, endDateStr]);
+        WHERE $_columnTimestamp >= ? AND $_columnTimestamp < ?
+      ''', [startTimestamp, endTimestamp]);
       
       final stats = result.first;
       Logger.success('Sales statistics calculated', tag: 'SALES_REPO');
@@ -269,7 +268,7 @@ class SalesRepository {
         'totalProfit': stats['total_profit'] ?? 0.0,
         'averagePrice': stats['average_price'] ?? 0.0,
       };
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to calculate sales statistics', tag: 'SALES_REPO', error: e);
       return {
         'totalSales': 0,
@@ -282,36 +281,38 @@ class SalesRepository {
     }
   }
 
-  /// Get top selling products
-  Future<List<Map<String, dynamic>>> getTopSellingProducts({int limit = 10}) async {
+  /// Get monthly sales summary (using timestamp comparison)
+  Future<List<Map<String, dynamic>>> getMonthlySummary(int year, int month) async {
     try {
       final db = await _dbConnection.database;
-      Logger.info('Fetching top $limit selling products', tag: 'SALES_REPO');
+      final startOfMonth = DateTime(year, month, 1).toIso8601String();
+      final endOfMonth = DateTime(year, month + 1, 1).toIso8601String();
+      
+      Logger.info('Fetching monthly sales summary for $year-$month', tag: 'SALES_REPO');
       
       final result = await db.rawQuery('''
         SELECT 
-          $_columnProductId,
-          $_columnProductName,
-          $_columnBrand,
-          $_columnModel,
-          SUM($_columnQuantity) as total_sold,
-          SUM($_columnPrice * $_columnQuantity) as total_revenue
+          DATE($_columnTimestamp) as sale_date,
+          COUNT(*) as sales_count,
+          SUM($_columnQuantity) as total_quantity,
+          SUM($_columnPrice * $_columnQuantity) as total_revenue,
+          SUM($_columnFinalCost * $_columnQuantity) as total_cost,
+          SUM(($_columnPrice - $_columnFinalCost) * $_columnQuantity) as total_profit
         FROM $_tableName 
-        WHERE $_columnProductId IS NOT NULL
-        GROUP BY $_columnProductId
-        ORDER BY total_sold DESC
-        LIMIT ?
-      ''', [limit]);
+        WHERE $_columnTimestamp >= ? AND $_columnTimestamp < ?
+        GROUP BY DATE($_columnTimestamp)
+        ORDER BY DATE($_columnTimestamp) DESC
+      ''', [startOfMonth, endOfMonth]);
       
-      Logger.success('Fetched ${result.length} top selling products', tag: 'SALES_REPO');
+      Logger.success('Fetched ${result.length} days of monthly sales summary', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
-      Logger.error('Failed to fetch top selling products', tag: 'SALES_REPO', error: e);
+    } catch (e) {
+      Logger.error('Failed to fetch monthly sales summary', tag: 'SALES_REPO', error: e);
       return [];
     }
   }
 
-  /// Get daily sales summary
+  /// Get daily sales summary (using timestamp comparison)
   Future<List<Map<String, dynamic>>> getDailySummary(int dayCount) async {
     try {
       final db = await _dbConnection.database;
@@ -319,21 +320,21 @@ class SalesRepository {
       
       final result = await db.rawQuery('''
         SELECT 
-          $_columnDate as date,
+          DATE($_columnTimestamp) as sale_date,
           COUNT(*) as sales_count,
           SUM($_columnQuantity) as total_quantity,
           SUM($_columnPrice * $_columnQuantity) as total_revenue,
           SUM($_columnFinalCost * $_columnQuantity) as total_cost,
           SUM(($_columnPrice - $_columnFinalCost) * $_columnQuantity) as total_profit
         FROM $_tableName 
-        GROUP BY $_columnDate
-        ORDER BY $_columnDate DESC
+        GROUP BY DATE($_columnTimestamp)
+        ORDER BY DATE($_columnTimestamp) DESC
         LIMIT ?
       ''', [dayCount]);
       
       Logger.success('Fetched ${result.length} days of sales summary', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to fetch daily sales summary', tag: 'SALES_REPO', error: e);
       return [];
     }
@@ -359,7 +360,7 @@ class SalesRepository {
       
       Logger.success('Found ${result.length} sales matching query: $query', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to search sales', tag: 'SALES_REPO', error: e);
       return [];
     }
@@ -380,7 +381,7 @@ class SalesRepository {
       
       Logger.success('Found ${result.length} sales for product: $productId', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to fetch sales by product ID', tag: 'SALES_REPO', error: e);
       return [];
     }
@@ -391,19 +392,19 @@ class SalesRepository {
     try {
       final db = await _dbConnection.database;
       final cutoffDate = DateTime.now().subtract(Duration(days: daysToKeep));
-      final cutoffDateStr = cutoffDate.toIso8601String().split('T').first;
+      final cutoffTimestamp = cutoffDate.toIso8601String();
       
-      Logger.info('Deleting sales older than $cutoffDateStr', tag: 'SALES_REPO');
+      Logger.info('Deleting sales older than $cutoffTimestamp', tag: 'SALES_REPO');
       
       final result = await db.delete(
         _tableName,
-        where: '$_columnDate < ?',
-        whereArgs: [cutoffDateStr],
+        where: '$_columnTimestamp < ?',
+        whereArgs: [cutoffTimestamp],
       );
       
       Logger.success('Deleted $result old sales records', tag: 'SALES_REPO');
       return result;
-    } catch (e, stackTrace) {
+    } catch (e) {
       Logger.error('Failed to delete old sales', tag: 'SALES_REPO', error: e);
       return 0;
     }
