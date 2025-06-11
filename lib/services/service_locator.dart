@@ -7,6 +7,7 @@ import 'database/repositories/product_repository.dart';
 import 'database/repositories/sales_repository.dart';
 import 'database/repositories/credit_repository.dart';
 import 'database/repositories/income_expense_repository.dart';
+import 'database/repositories/daily_session_repository.dart';
 
 /// Global service locator instance
 final getIt = GetIt.instance;
@@ -31,6 +32,7 @@ Future<void> setupServiceLocator() async {
     getIt.registerLazySingleton<SalesRepository>(() => SalesRepository());
     getIt.registerLazySingleton<CreditRepository>(() => CreditRepository());
     getIt.registerLazySingleton<IncomeExpenseRepository>(() => IncomeExpenseRepository());
+    getIt.registerLazySingleton<DailySessionRepository>(() => DailySessionRepository());
     
     Logger.success('Service locator başarıyla yapılandırıldı - Repository pattern kullanılıyor', tag: 'APP');
   } catch (e, stackTrace) {

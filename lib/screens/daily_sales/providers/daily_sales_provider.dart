@@ -1,21 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:get_it/get_it.dart';
 import '../../../models/product.dart';
 import '../../../services/database/repositories/product_repository.dart';
 import '../../../services/database/repositories/sales_repository.dart';
+import '../../../services/database/repositories/daily_session_repository.dart';
 import '../../../utils/logger.dart';
 
 /// Provider for daily sales page business logic and state management
-/// Migrated to Repository pattern for data consistency
+/// MIGRATION COMPLETED: All day status management moved from SharedPreferences to DailySessionRepository
+/// This ensures data consistency and prevents data loss during app crashes
+/// SharedPreferences now only used for simple settings, all business data in SQLite
 class DailySalesProvider with ChangeNotifier {
   late final ProductRepository _productRepository;
   late final SalesRepository _salesRepository;
+  late final DailySessionRepository _dailySessionRepository;
 
   DailySalesProvider() {
     _productRepository = GetIt.instance<ProductRepository>();
     _salesRepository = GetIt.instance<SalesRepository>();
+    _dailySessionRepository = GetIt.instance<DailySessionRepository>();
   }
 
   // State variables
@@ -62,19 +66,15 @@ class DailySalesProvider with ChangeNotifier {
     await _checkDayStarted();
   }
 
-  /// Check if day has been started
+  /// Check if day has been started using DailySessionRepository
   Future<void> _checkDayStarted() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final started = prefs.getBool('day_started') ?? false;
-      final startTimeMillis = prefs.getInt('day_start_time');
+      final session = await _dailySessionRepository.getTodaySession();
       
-      _dayStarted = started;
-      _dayStartTime = startTimeMillis != null 
-          ? DateTime.fromMillisecondsSinceEpoch(startTimeMillis) 
-          : null;
+      _dayStarted = session.sessionStarted;
+      _dayStartTime = session.startTime;
       
-      if (started) {
+      if (session.sessionStarted) {
         await loadData();
       } else {
         _isLoading = false;
@@ -88,17 +88,13 @@ class DailySalesProvider with ChangeNotifier {
     }
   }
 
-  /// Start the business day
+  /// Start the business day using DailySessionRepository
   Future<void> startDay() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final now = DateTime.now();
+      final session = await _dailySessionRepository.startSession();
       
-      await prefs.setBool('day_started', true);
-      await prefs.setInt('day_start_time', now.millisecondsSinceEpoch);
-      
-      _dayStarted = true;
-      _dayStartTime = now;
+      _dayStarted = session.sessionStarted;
+      _dayStartTime = session.startTime;
       
       await loadData();
       notifyListeners();
@@ -110,19 +106,19 @@ class DailySalesProvider with ChangeNotifier {
     }
   }
 
-  /// End the business day
+  /// End the business day using DailySessionRepository
   Future<void> endDay() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      // End session with calculated totals
+      final session = await _dailySessionRepository.endSession(
+        totalRevenue: _totalAmount,
+        totalCost: _totalCost,
+        totalProfit: _totalProfit,
+        totalSales: _totalSales,
+      );
       
-      await prefs.setBool('day_started', false);
-      await prefs.remove('day_start_time');
-      
-      // Save daily summary
-      await _saveDailySummary();
-      
-      _dayStarted = false;
-      _dayStartTime = null;
+      _dayStarted = session.sessionStarted;
+      _dayStartTime = session.startTime;
       
       // Clear daily data
       _todaySales.clear();
@@ -175,11 +171,9 @@ class DailySalesProvider with ChangeNotifier {
       final products = await _productRepository.getAll();
       final dailySales = await _salesRepository.getByDate(date);
       
-      // Load daily summary from SharedPreferences (simple data)
-      final prefs = await SharedPreferences.getInstance();
+      // Load daily session data from repository instead of SharedPreferences
       final dateKey = DateFormat('yyyy-MM-dd').format(date);
-      final summaryJson = prefs.getString('daily_summary_$dateKey');
-      final openingTimeMillis = prefs.getInt('opening_time_$dateKey');
+      final session = await _dailySessionRepository.getSessionByDate(dateKey);
       
       // Calculate totals from sales data
       double totalAmount = 0;
@@ -207,15 +201,13 @@ class DailySalesProvider with ChangeNotifier {
         'history': allSales,
         'products': products,
         'dailySales': dailySales,
-        'summary': summaryJson,
+        'summary': session.toMap(),
         'totalAmount': totalAmount,
         'totalCost': totalCost,
         'totalProfit': totalProfit,
         'totalSales': totalSales,
         'totalProducts': totalProducts,
-        'openingTime': openingTimeMillis != null 
-            ? DateTime.fromMillisecondsSinceEpoch(openingTimeMillis)
-            : null,
+        'openingTime': session.startTime,
       };
     } catch (e) {
       Logger.error('Background data loading failed', tag: 'SALES_PROVIDER', error: e);
@@ -332,7 +324,7 @@ class DailySalesProvider with ChangeNotifier {
     }
   }
 
-  /// Calculate daily summary
+  /// Calculate daily summary and update session totals
   void _calculateDailySummary() {
     _totalSales = 0;
     _totalProducts = 0;
@@ -354,29 +346,25 @@ class DailySalesProvider with ChangeNotifier {
     }
     
     _totalProfit = _totalAmount - _totalCost;
+    
+    // Update session totals in repository
+    _updateSessionTotals();
   }
 
-  /// Save daily summary using SharedPreferences for simple data
-  Future<void> _saveDailySummary() async {
+  /// Update session totals during the day
+  Future<void> _updateSessionTotals() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
       final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
-      
-      final summaryJson = {
-        'date': dateKey,
-        'totalSales': _totalSales,
-        'totalProducts': _totalProducts,
-        'totalAmount': _totalAmount,
-        'totalCost': _totalCost,
-        'totalProfit': _totalProfit,
-        'openingTime': _dayStartTime?.toIso8601String(),
-        'closingTime': DateTime.now().toIso8601String(),
-      };
-      
-      await prefs.setString('daily_summary_$dateKey', summaryJson.toString());
-      Logger.info('Daily summary saved', tag: 'SALES_PROVIDER');
+      await _dailySessionRepository.updateSessionTotals(
+        dateKey,
+        totalRevenue: _totalAmount,
+        totalCost: _totalCost,
+        totalProfit: _totalProfit,
+        totalSales: _totalSales,
+      );
+      Logger.info('Session totals updated', tag: 'SALES_PROVIDER');
     } catch (e) {
-      Logger.error('Failed to save daily summary', tag: 'SALES_PROVIDER', error: e);
+      Logger.error('Failed to update session totals', tag: 'SALES_PROVIDER', error: e);
     }
   }
 

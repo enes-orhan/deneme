@@ -13,7 +13,7 @@ class DatabaseConnection {
 
   static Database? _database;
   static const String _dbName = 'kiyafet_app.db';
-  static const int _dbVersion = 3;
+  static const int _dbVersion = 4;
   static String? _dbPath;
 
   /// Get the singleton database instance
@@ -234,6 +234,23 @@ class DatabaseConnection {
       )
     ''');
     
+    // Add daily sessions table for day status management
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS daily_sessions (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL UNIQUE,
+        session_started INTEGER NOT NULL DEFAULT 0,
+        start_time TEXT,
+        end_time TEXT,
+        total_revenue REAL DEFAULT 0.0,
+        total_cost REAL DEFAULT 0.0,
+        total_profit REAL DEFAULT 0.0,
+        total_sales INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    
     // Add indexes for better performance
     await db.execute('CREATE INDEX idx_products_barcode ON products(barcode)');
     await db.execute('CREATE INDEX idx_sales_date ON sales(date)');
@@ -242,6 +259,7 @@ class DatabaseConnection {
     await db.execute('CREATE INDEX idx_expenses_date ON expenses(date)');
     await db.execute('CREATE INDEX idx_credit_name ON credit_entries(name, surname)');
     await db.execute('CREATE INDEX idx_income_expense_type_date ON income_expense_entries(type, date)');
+    await db.execute('CREATE INDEX idx_daily_sessions_date ON daily_sessions(date)');
     
     Logger.info('Version 2 database schema created with new tables and indexes', tag: 'DB_CONNECTION');
   }
@@ -296,6 +314,30 @@ class DatabaseConnection {
       await db.execute('CREATE INDEX IF NOT EXISTS idx_income_expense_type_date ON income_expense_entries(type, date)');
       
       Logger.info('Database upgraded to version 3 with new tables', tag: 'DB_CONNECTION');
+    }
+    
+    if (oldVersion < 4) {
+      // Add daily sessions table for day status management
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS daily_sessions (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL UNIQUE,
+          session_started INTEGER NOT NULL DEFAULT 0,
+          start_time TEXT,
+          end_time TEXT,
+          total_revenue REAL DEFAULT 0.0,
+          total_cost REAL DEFAULT 0.0,
+          total_profit REAL DEFAULT 0.0,
+          total_sales INTEGER DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      
+      // Add index for daily sessions
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_daily_sessions_date ON daily_sessions(date)');
+      
+      Logger.info('Database upgraded to version 4 with daily_sessions table', tag: 'DB_CONNECTION');
     }
   }
 
