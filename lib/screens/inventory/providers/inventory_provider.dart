@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:get_it/get_it.dart';
 import '../../../models/product.dart';
-import '../../../services/storage_service.dart';
+import '../../../services/database/repositories/product_repository.dart';
 import '../../../utils/logger.dart';
 
 /// Provider for inventory page business logic and state management
-/// Extracted from the original 599-line InventoryPage for better modularity
+/// Updated to use Repository pattern instead of StorageService
 class InventoryProvider with ChangeNotifier {
-  final StorageService _storageService;
+  late final ProductRepository _productRepository;
 
-  InventoryProvider(this._storageService);
+  InventoryProvider() {
+    _productRepository = GetIt.instance<ProductRepository>();
+  }
 
   // State variables
   List<Product> _products = [];
@@ -41,7 +44,7 @@ class InventoryProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final products = await _storageService.getProducts();
+      final products = await _productRepository.getAll();
       
       // Extract all categories
       final categories = <String>{'Tümü'};
@@ -140,7 +143,7 @@ class InventoryProvider with ChangeNotifier {
   /// Add a new product
   Future<void> addProduct(Product product) async {
     try {
-      await _storageService.saveProduct(product);
+      await _productRepository.createOrUpdate(product);
       await loadProducts();
       Logger.success('Product added successfully: ${product.name}', tag: 'INVENTORY_PROVIDER');
     } catch (e) {
@@ -152,7 +155,7 @@ class InventoryProvider with ChangeNotifier {
   /// Update existing product
   Future<void> updateProduct(Product product) async {
     try {
-      await _storageService.saveProduct(product);
+      await _productRepository.update(product);
       await loadProducts();
       Logger.success('Product updated successfully: ${product.name}', tag: 'INVENTORY_PROVIDER');
     } catch (e) {
@@ -164,7 +167,7 @@ class InventoryProvider with ChangeNotifier {
   /// Delete a product
   Future<void> deleteProduct(String productId) async {
     try {
-      await _storageService.deleteProduct(productId);
+      await _productRepository.delete(productId);
       await loadProducts();
       Logger.success('Product deleted successfully', tag: 'INVENTORY_PROVIDER');
     } catch (e) {
@@ -188,7 +191,7 @@ class InventoryProvider with ChangeNotifier {
       }
       
       for (var product in products) {
-        await _storageService.saveProduct(product);
+        await _productRepository.createOrUpdate(product);
       }
       
       await loadProducts();

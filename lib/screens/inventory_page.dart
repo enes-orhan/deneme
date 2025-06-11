@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../models/product.dart';
-import '../services/storage_service.dart';
+
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/product_list_widget.dart';
@@ -14,11 +14,8 @@ import 'inventory/providers/inventory_provider.dart';
 /// Main inventory page for managing products
 /// Refactored from 599 lines to ~300 lines using modular components
 class InventoryPage extends StatefulWidget {
-  final StorageService storageService;
-
   const InventoryPage({
     Key? key,
-    required this.storageService,
   }) : super(key: key);
 
   @override
@@ -37,7 +34,7 @@ class _InventoryPageState extends State<InventoryPage> {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (context) => InventoryProvider(widget.storageService)..initialize(),
+      create: (context) => InventoryProvider()..initialize(),
       child: Scaffold(
         backgroundColor: AppConstants.backgroundColor,
         appBar: _buildAppBar(),

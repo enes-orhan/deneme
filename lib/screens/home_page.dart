@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
-import '../services/storage_service.dart';
+
 import '../services/auth_service.dart';
 import '../models/income_expense_entry.dart';
 import '../utils/logger.dart';
@@ -20,7 +20,6 @@ class HomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     // Provider'dan servisleri al
     final authService = Provider.of<AuthService>(context);
-    final storageService = Provider.of<StorageService>(context);
     final currentUser = authService.currentUser;
     
     Logger.info('HomePage build ediliyor. Kullanıcı: ${currentUser?.name ?? 'Yok'}', tag: 'UI');
@@ -175,10 +174,7 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => Provider<StorageService>.value(
-                                value: storageService,
-                                child: InventoryPage(storageService: storageService),
-                              ),
+                              builder: (context) => const InventoryPage(),
                             ),
                           );
                         },
@@ -193,10 +189,7 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => Provider<StorageService>.value(
-                                value: storageService,
-                                child: DailySalesPage(storageService: storageService),
-                              ),
+                              builder: (context) => const DailySalesPage(),
                             ),
                           );
                         },
@@ -211,13 +204,9 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => Provider<StorageService>.value(
-                                value: storageService,
-                                child: IncomeExpenseDetailsPage(
-                                  type: EntryType.gelir,
-                                  entries: const [],
-                                  storageService: storageService,
-                                ),
+                              builder: (context) => const IncomeExpenseDetailsPage(
+                                type: EntryType.gelir,
+                                entries: [],
                               ),
                             ),
                           );
