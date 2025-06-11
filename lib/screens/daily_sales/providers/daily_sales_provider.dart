@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:get_it/get_it.dart';
 import '../../../models/product.dart';
 import '../../../services/storage_service.dart';
 import '../../../utils/logger.dart';
 
 /// Provider for daily sales page business logic and state management
+/// TODO: Migrate from StorageService to Repository pattern
 class DailySalesProvider with ChangeNotifier {
-  final StorageService _storageService;
+  late final StorageService _storageService;
 
-  DailySalesProvider(this._storageService);
+  DailySalesProvider() {
+    _storageService = GetIt.instance<StorageService>();
+  }
 
   // State variables
   List<Map<String, dynamic>> _todaySales = [];

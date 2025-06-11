@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../constants/app_constants.dart';
 import '../../models/product.dart';
-import '../../services/storage_service.dart';
+
 import '../../widgets/custom_button.dart';
 import '../../widgets/custom_text_field.dart';
 import 'providers/daily_sales_provider.dart';
@@ -13,12 +13,10 @@ import 'components/day_management_widget.dart';
 import '../../utils/csv_export_util.dart';
 
 /// Refactored daily sales page with modular components
+/// TODO: Migrate to Repository pattern - currently using StorageService
 class DailySalesPage extends StatefulWidget {
-  final StorageService storageService;
-
   const DailySalesPage({
     Key? key,
-    required this.storageService,
   }) : super(key: key);
 
   @override
@@ -38,7 +36,7 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _provider = DailySalesProvider(widget.storageService);
+    _provider = DailySalesProvider();
     
     // Initialize provider
     WidgetsBinding.instance.addPostFrameCallback((_) {
