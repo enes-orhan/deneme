@@ -129,7 +129,7 @@ class _CreditBookPageState extends State<CreditBookPage> {
               prefixIcon: Icon(Icons.search),
               border: OutlineInputBorder(),
             ),
-            onChanged: provider.filterEntries,
+            onChanged: provider.searchEntries,
           ),
           const SizedBox(height: 16),
           _buildStatsRow(stats),
@@ -391,7 +391,7 @@ class _CreditBookPageState extends State<CreditBookPage> {
       try {
         final paymentAmount = double.parse(paymentController.text);
         if (paymentAmount > 0 && paymentAmount <= entry.remainingDebt) {
-          await provider.addPayment(entry.name, paymentAmount, DateTime.now());
+          await provider.addPayment(entry.id, paymentAmount);
           _showSuccess('Ödeme başarıyla kaydedildi');
         } else {
           _showError('Geçersiz ödeme miktarı');
@@ -478,7 +478,7 @@ class _CreditBookPageState extends State<CreditBookPage> {
 
     if (confirmed == true) {
       try {
-        await provider.deleteEntry(entry.name); // Temporary ID field
+        await provider.deleteEntry(entry.id); // Fixed: Use ID instead of name
         _showSuccess('Kayıt başarıyla silindi');
       } catch (e) {
         _showError('Kayıt silinirken hata oluştu: $e');
