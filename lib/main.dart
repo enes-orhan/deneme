@@ -114,9 +114,14 @@ class _SplashAppState extends State<SplashApp> {
     // Provider ile state management uygula
     return MultiProvider(
       providers: [
+        // Servisler (GetIt'ten alınan singleton'lar)
         Provider<AuthService>.value(value: getIt<AuthService>()),
         Provider<StorageService>.value(value: getIt<StorageService>()),
         Provider<DatabaseHelper>.value(value: getIt<DatabaseHelper>()),
+        
+        // State Provider'ları gerektiğinde eklenecek
+        // ChangeNotifierProvider<CreditProvider>(create: (_) => CreditProvider()),
+        // ChangeNotifierProvider<IncomeExpenseProvider>(create: (_) => IncomeExpenseProvider()),
       ],
       child: const MyApp(),
     );

@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../services/auth_service.dart';
 import '../services/storage_service.dart';
-import '../services/service_locator.dart';
+
 import '../models/user.dart';
 import '../utils/logger.dart';
 import 'home_page.dart';
@@ -60,8 +60,7 @@ class _LoginPageState extends State<LoginPage> {
 
         if (user != null) {
           // Oturumu açık tut flag'ini kaydet
-          final prefs = getIt<SharedPreferences>();
-          await prefs.setBool('keep_logged_in', _keepLoggedIn);
+          await authService.setKeepLoggedIn(_keepLoggedIn);
           
           Logger.success('Giriş başarılı: ${user.name}', tag: 'AUTH');
           

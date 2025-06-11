@@ -149,6 +149,11 @@ class AuthService {
     _currentUser = null;
     await _prefs.remove(_currentUserKey);
   }
+
+  // Oturumu açık tutma tercihini kaydet
+  Future<void> setKeepLoggedIn(bool keepLoggedIn) async {
+    await _prefs.setBool('keep_logged_in', keepLoggedIn);
+  }
   
   // Kullanıcı listesini kaydet
   Future<void> _saveUsers(List<User> users) async {

@@ -3,12 +3,13 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../services/storage_service.dart';
 import '../services/auth_service.dart';
+import '../models/income_expense_entry.dart';
 import '../utils/logger.dart';
 import '../widgets/custom_button.dart';
 import 'inventory_page.dart';
 import 'daily_sales_page.dart';
 import 'credit_book_page.dart';
-import 'income_expense_balance_page.dart';
+import 'income_expense_details_page.dart';
 import 'login_page.dart';
 import 'user_management_page.dart';
 
@@ -54,7 +55,7 @@ class HomePage extends StatelessWidget {
                   Navigator.push(
                     context, 
                     MaterialPageRoute(
-                      builder: (_) => const UserManagementPage()
+                      builder: (_) => UserManagementPage(authService: authService)
                     )
                   );
                 } else if (value == 'logout') {
@@ -174,9 +175,9 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => ChangeNotifierProvider<StorageService>.value(
+                              builder: (context) => Provider<StorageService>.value(
                                 value: storageService,
-                                child: const InventoryPage(),
+                                child: InventoryPage(storageService: storageService),
                               ),
                             ),
                           );
@@ -192,7 +193,10 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => const DailySalesPage(),
+                              builder: (context) => Provider<StorageService>.value(
+                                value: storageService,
+                                child: DailySalesPage(storageService: storageService),
+                              ),
                             ),
                           );
                         },
@@ -207,7 +211,14 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => const IncomeExpenseBalancePage(),
+                              builder: (context) => Provider<StorageService>.value(
+                                value: storageService,
+                                child: IncomeExpenseDetailsPage(
+                                  type: EntryType.gelir,
+                                  entries: const [],
+                                  storageService: storageService,
+                                ),
+                              ),
                             ),
                           );
                         },
