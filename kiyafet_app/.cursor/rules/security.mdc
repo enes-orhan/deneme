@@ -1,0 +1,45 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+    For each new and existing page that you create, you MUST FOLLOW THE RULES DOWNBELOW. API and database security is the most important thing for our service.
+
+For every /api route:
+- Require a valid JWT in the Authorization header
+- Reject missing or invalid fields
+- Rate-limit to <5 req/min/IP (return 429 if exceeded)
+- Validate inputs with Zod
+
+Then scan the repo for hardcoded tokens or private URLs.
+
+For every database / Supabase related thing:
+- Enable Row Level Security on every table.
+- Create policies using auth.uid() so users only access their own rows.
+- Never use service_role in client code.
+- For privileged actions, wrap SQL in RPCs and call them from the server.
+- Always use parameterized queries.
+
+## Debug & Logging Security
+
+**CRITICAL: Never use console.log in production code**
+
+- Use the centralized debug utility from `@/lib/debug`
+- Import: `import { debug, debugServer, sanitizeForLogging } from '@/lib/debug';`
+- Client-side: Use `debug.log()`, `debug.error()`, etc.
+- Server-side: Use `debugServer.log()`, `debugServer.apiRequest()`, etc.
+- Always sanitize sensitive data: `sanitizeForLogging(data)`
+- Debug output is automatically disabled in production when `NEXT_PUBLIC_DEBUG_MODE=false`
+
+**Environment Variables for Debug Control:**
+- Development: `NEXT_PUBLIC_DEBUG_MODE=true` and `DEBUG_MODE=true`
+- Production: `NEXT_PUBLIC_DEBUG_MODE=false` and `DEBUG_MODE=false`
+
+**Before going live:**
+1. Set both debug flags to `false` in production environment
+2. Verify no `console.log` statements remain in codebase
+3. Test that no debug output appears in production build
+
+Use process.env.<VAR> for every secret.
+If the code needs config, tell me the exact key to add to .env.local.
+Assume .env.local already exists.

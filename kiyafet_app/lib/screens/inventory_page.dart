@@ -1,20 +1,18 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math'; // min fonksiyonu için
-import 'package:file_picker/file_picker.dart';
-import 'package:csv/csv.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../models/product.dart';
 import '../services/storage_service.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
-import 'package:uuid/uuid.dart';
 import '../widgets/product_list_widget.dart';
 import '../widgets/product_filter_widget.dart';
 import '../widgets/product_form_widget.dart';
+import '../utils/csv_export_util.dart';
+import 'inventory/providers/inventory_provider.dart';
 
+/// Main inventory page for managing products
+/// Refactored from 599 lines to ~300 lines using modular components
 class InventoryPage extends StatefulWidget {
   final StorageService storageService;
 
@@ -28,572 +26,448 @@ class InventoryPage extends StatefulWidget {
 }
 
 class _InventoryPageState extends State<InventoryPage> {
-  List<Product> _products = [];
-  List<Product> _filteredProducts = [];
-  bool _isLoading = true;
-  String _searchQuery = '';
-  String _sortBy = 'name';
-  bool _sortAscending = true;
-  String _filterCategory = 'Tümü';
-  List<String> _categories = ['Tümü'];
-  
   final _scrollController = ScrollController();
 
   @override
-  void initState() {
-    super.initState();
-    _loadProducts();
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
-  Future<void> _loadProducts() async {
-    setState(() => _isLoading = true);
-    try {
-      final products = await widget.storageService.getProducts();
-      
-      // Tüm kategorileri çıkart
-      final categories = <String>{'Tümü'};
-      for (var product in products) {
-        if (product.category.isNotEmpty) {
-          categories.add(product.category);
-        }
-      }
-      
-      setState(() {
-        _products = products;
-        _filteredProducts = products;
-        _categories = categories.toList()..sort();
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
-      _showError('Ürünler yüklenirken bir hata oluştu: $e');
-    }
-  }
-
-  void _filterProducts(String query) {
-    setState(() {
-      _searchQuery = query;
-      _applyFilters();
-    });
-  }
-
-  void _applyFilters() {
-    _filteredProducts = _products.where((product) {
-      // Önce arama sorgusuna göre filtrele
-      final searchMatch = _searchQuery.isEmpty || 
-        product.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        product.brand.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        product.model.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        product.color.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        product.size.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        product.region.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-        (product.barcode?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false);
-      
-      // Sonra kategoriye göre filtrele
-      final categoryMatch = _filterCategory == 'Tümü' || product.category == _filterCategory;
-      
-      return searchMatch && categoryMatch;
-    }).toList();
-    
-    _sortProducts();
-  }
-
-  void _sortProducts() {
-    _filteredProducts.sort((a, b) {
-      int comparison;
-      switch (_sortBy) {
-        case 'name':
-          comparison = a.name.compareTo(b.name);
-          break;
-        case 'brand':
-          comparison = a.brand.compareTo(b.brand);
-          break;
-        case 'quantity':
-          comparison = a.quantity.compareTo(b.quantity);
-          break;
-        case 'region':
-          comparison = a.region.compareTo(b.region);
-          break;
-        case 'price':
-          comparison = a.finalCost.compareTo(b.finalCost);
-          break;
-        default:
-          comparison = a.name.compareTo(b.name);
-      }
-      return _sortAscending ? comparison : -comparison;
-    });
-  }
-
-  Future<bool> _requestPermissions() async {
-    // Android 13 ve üzeri için farklı izinleri iste
-    if (await Permission.storage.status.isDenied ||
-        await Permission.manageExternalStorage.status.isDenied) {
-      
-      if (await Permission.storage.request().isGranted) {
-        print("Storage permission granted");
-        return true;
-      }
-      
-      // API 33+ için
-      final mediaPermissions = await [
-        Permission.photos,
-        Permission.videos,
-        Permission.audio,
-      ].request();
-      
-      print("Media permissions: $mediaPermissions");
-      
-      // Son çare olarak manageExternalStorage iste
-      try {
-        await Permission.manageExternalStorage.request();
-        print("ManageExternalStorage: ${await Permission.manageExternalStorage.status}");
-      } catch (e) {
-        print("Error requesting manageExternalStorage: $e");
-      }
-    }
-    
-    // İzin durumunu kontrol et
-    bool hasStoragePermission = await Permission.storage.isGranted;
-    bool hasManagePermission = await Permission.manageExternalStorage.isGranted;
-    bool hasPhotosPermission = await Permission.photos.isGranted;
-    
-    print("Permissions: storage=$hasStoragePermission, manage=$hasManagePermission, photos=$hasPhotosPermission");
-    
-    return hasStoragePermission || hasManagePermission || hasPhotosPermission;
-  }
-
-  // Barkod doğrulama fonksiyonu
-  bool _isValidBarcode(String barcode) {
-    // Boş barkod geçerli
-    if (barcode.isEmpty) return true;
-    
-    // Sadece rakamlar olmalı
-    if (!RegExp(r'^\d+$').hasMatch(barcode)) return false;
-    
-    // EAN-13, EAN-8 veya UPC-A formatı kontrolü
-    if (barcode.length != 8 && barcode.length != 12 && barcode.length != 13) return false;
-    
-    // Check digit hesaplama
-    int sum = 0;
-    for (int i = 0; i < barcode.length - 1; i++) {
-      int digit = int.parse(barcode[i]);
-      if (i % 2 == 0) {
-        sum += digit;
-      } else {
-        sum += digit * 3;
-      }
-    }
-    
-    int checkDigit = (10 - (sum % 10)) % 10;
-    return checkDigit == int.parse(barcode[barcode.length - 1]);
-  }
-
-  // Barkod oluşturma fonksiyonu
-  String _generateBarcode() {
-    // EAN-13 formatında barkod oluştur (Türkiye için 868-869 ile başlar)
-    final random = Random();
-    String barcode = '868'; // Türkiye ülke kodu
-    
-    // 9 haneli rastgele sayı
-    for (int i = 0; i < 9; i++) {
-      barcode += random.nextInt(10).toString();
-    }
-    
-    // Check digit hesaplama
-    int sum = 0;
-    for (int i = 0; i < barcode.length; i++) {
-      int digit = int.parse(barcode[i]);
-      if (i % 2 == 0) {
-        sum += digit;
-      } else {
-        sum += digit * 3;
-      }
-    }
-    
-    int checkDigit = (10 - (sum % 10)) % 10;
-    barcode += checkDigit.toString();
-    
-    return barcode;
-  }
-
-  Future<void> _importFromCSV() async {
-    try {
-      // Önce izinleri kontrol et
-      final hasPermission = await _requestPermissions();
-      if (!hasPermission) {
-        _showError('Dosya erişim izni verilmedi. Lütfen ayarlardan izin verin.');
-        return;
-      }
-      
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['csv'],
-        allowMultiple: false,
-      );
-
-      if (result != null && result.files.isNotEmpty) {
-        final file = result.files.first;
-        if (file.path != null) {
-          print('Seçilen dosya yolu: ${file.path}');
-          final input = File(file.path!).readAsStringSync();
-          print('Dosya içeriği: ${input.substring(0, min(100, input.length))}...'); // İlk 100 karakteri göster
-          
-          // CSV ayırıcı olarak hem virgül hem de noktalı virgül deneyeceğiz
-          List<List<dynamic>> rows = [];
-          
-          try {
-            // Önce noktalı virgül (;) ile deneyelim
-            if (input.contains(';')) {
-              rows = const CsvToListConverter(fieldDelimiter: ';').convert(input);
-              print('Noktalı virgül ayırıcı ile CSV dönüştürüldü. Satır sayısı: ${rows.length}');
-            } else {
-              // Yoksa normal virgül (,) ile deneyelim
-              rows = const CsvToListConverter().convert(input);
-              print('Virgül ayırıcı ile CSV dönüştürüldü. Satır sayısı: ${rows.length}');
-            }
-          } catch (e) {
-            print('CSV dönüştürme hatası: $e');
-            _showError('CSV dosyası dönüştürülürken bir hata oluştu: $e');
-            return;
-          }
-          
-          print('CSV satır sayısı: ${rows.length}');
-          if (rows.isEmpty) {
-            _showError('CSV dosyası boş görünüyor');
-            return;
-          }
-          
-          if (rows.length > 1) { // Başlık satırı + en az bir veri satırı
-            // Önce veritabanını sıfırlayalım
-            await widget.storageService.resetDatabase();
-            print('Veritabanı sıfırlandı, CSV içe aktarma başlıyor...');
-            
-            final products = <Product>[];
-            
-            // İlk satır başlık satırı, onu atla
-            for (var i = 1; i < rows.length; i++) {
-              final row = rows[i];
-              print('Satır $i: $row');
-              
-              try {
-                // En az gerekli alan sayısı kontrolü
-                if (row.length < 8) {
-                  print('Satır $i yeterli alana sahip değil. Beklenen: >=8, Bulunan: ${row.length}');
-                  continue; // Bu satırı atla ama diğer satırları işlemeye devam et
-                }
-                
-                // Kolon değerlerini sayısal değere çevirirken % işaretini ve benzeri karakterleri temizleyelim
-                String cleanValue(dynamic value) {
-                  if (value == null) return '';
-                  String strValue = value.toString().trim();
-                  // Sayısal değeri etkileyecek tüm karakterleri kaldır
-                  return strValue
-                    .replaceAll('%', '')
-                    .replaceAll('TL', '')
-                    .replaceAll('₺', '')
-                    .replaceAll(',', '.')  // Virgülleri nokta ile değiştir (Türkçe format)
-                    .replaceAll(' ', '')
-                    .trim();
-                }
-                
-                // Kolon indexleri başlık sırasına göre netleştirildi
-                // ['Ürün Adı', 'Marka', 'Model', 'Renk', 'Beden', 'Adet', 'Bölge', 'Adet Maliyeti', 'KDV', 'Gider Oranı', 'Son Maliyet', 'Kar Marjı', 'Tavsiye Fiyat', 'Kategori']
-                final name = row[0]?.toString()?.trim() ?? '';
-                final brand = row[1]?.toString()?.trim() ?? '';
-                final model = row[2]?.toString()?.trim() ?? '';
-                final color = row[3]?.toString()?.trim() ?? '';
-                final size = row[4]?.toString()?.trim() ?? '';
-                final quantityStr = cleanValue(row[5]);
-                final region = row[6]?.toString()?.trim() ?? '';
-                final unitCostStr = row.length > 7 ? cleanValue(row[7]) : '0';
-                final vatStr = row.length > 8 ? cleanValue(row[8]) : '0';
-                final expenseRatioStr = row.length > 9 ? cleanValue(row[9]) : '0';
-                final finalCostStr = row.length > 10 ? cleanValue(row[10]) : '0';
-                final avgProfitMarginStr = row.length > 11 ? cleanValue(row[11]) : '0';
-                final recPriceStr = row.length > 12 ? cleanValue(row[12]) : '0';
-                final category = row.length > 13 ? row[13]?.toString()?.trim() ?? '' : '';
-                
-                print('Temizlenmiş miktarı: "$quantityStr"');
-                
-                // Kritik alanları doğrula
-                if (name.isEmpty || brand.isEmpty) {
-                  print('Satır $i: Ürün adı veya markası boş, atlanıyor');
-                  continue;
-                }
-                
-                // Quantity değerini int'e çevirmeyi dene
-                int quantity = 0;
-                if (quantityStr.isNotEmpty) {
-                  try {
-                    quantity = int.parse(quantityStr);
-                  } catch (e) {
-                    print('Quantity değeri int\'e çevrilemedi: $quantityStr, varsayılan 0 kullanılıyor');
-                  }
-                }
-                
-                // Sayısal değerleri çevir
-                double unitCost = 0.0;
-                double vat = 0.0;
-                double expenseRatio = 0.0;
-                double finalCost = 0.0;
-                double avgProfitMargin = 0.0;
-                double recPrice = 0.0;
-                try { unitCost = double.parse(unitCostStr); } catch (e) { print('unitCost çevrilemedi: $unitCostStr'); }
-                try { vat = double.parse(vatStr); } catch (e) { print('vat çevrilemedi: $vatStr'); }
-                try { expenseRatio = double.parse(expenseRatioStr); } catch (e) { print('expenseRatio çevrilemedi: $expenseRatioStr'); }
-                try { finalCost = double.parse(finalCostStr); } catch (e) { print('finalCost çevrilemedi: $finalCostStr'); }
-                try { avgProfitMargin = double.parse(avgProfitMarginStr); } catch (e) { print('avgProfitMargin çevrilemedi: $avgProfitMarginStr'); }
-                try { recPrice = double.parse(recPriceStr); } catch (e) { print('recPrice çevrilemedi: $recPriceStr'); }
-
-                // Barkod oluştur
-                final barcode = _generateBarcode();
-                print('Oluşturulan barkod: $barcode');
-
-                // CSV'den gelen değerleri doğrudan kullan, hesaplama yapma
-                final product = Product(
-                  id: const Uuid().v4(),
-                  name: name,
-                  brand: brand,
-                  model: model,
-                  color: color,
-                  size: size,
-                  quantity: quantity,
-                  region: region,
-                  barcode: barcode,
-                  unitCost: unitCost,
-                  vat: vat,
-                  expenseRatio: expenseRatio,
-                  finalCost: finalCost,
-                  averageProfitMargin: avgProfitMargin,
-                  recommendedPrice: recPrice,
-                  purchasePrice: unitCost,
-                  sellingPrice: recPrice,
-                  category: category,
-                );
-                
-                print('Oluşturulan ürün: ${product.name} (${product.brand}/${product.model}) - ${product.quantity} adet - ${product.finalCost} TL');
-                products.add(product);
-              } catch (e) {
-                print('CSV satır $i işleme hatası: $e');
-              }
-            }
-            
-            if (products.isNotEmpty) {
-              await widget.storageService.saveProducts(products);
-              await _loadProducts();
-              _showSuccess('${products.length} ürün başarıyla içe aktarıldı');
-            } else {
-              _showError('CSV dosyasında geçerli ürün bulunamadı. Lütfen format ve içeriği kontrol edin.');
-            }
-          } else {
-            _showError('CSV dosyası boş veya geçersiz format');
-          }
-        } else {
-          _showError('Dosya yolu alınamadı');
-        }
-      }
-    } catch (e) {
-      print('CSV içe aktarma hatası: $e');
-      _showError('CSV dosyası içe aktarılırken bir hata oluştu: $e');
-    }
-  }
-
-  Future<void> _exportToCSV() async {
-    try {
-      // Önce izinleri kontrol et
-      final hasPermission = await _requestPermissions();
-      if (!hasPermission) {
-        _showError('Dosya erişim izni verilmedi. Lütfen ayarlardan izin verin.');
-        return;
-      }
-      
-      final products = await widget.storageService.getProducts();
-      
-      if (products.isEmpty) {
-        _showError('Dışa aktarılacak ürün bulunamadı');
-        return;
-      }
-
-      final csvData = [
-        ['Ürün Adı', 'Marka', 'Model', 'Renk', 'Beden', 'Adet', 'Bölge', 'Barkod', 'Adet Maliyeti', 'KDV', 'Gider Oranı', 'Son Maliyet', 'Kar Marjı', 'Tavsiye Fiyat', 'Kategori'],
-        ...products.map((p) => [
-          p.name,
-          p.brand,
-          p.model,
-          p.color,
-          p.size,
-          p.quantity.toString(),
-          p.region,
-          p.barcode ?? '',
-          p.unitCost.toString(),
-          p.vat.toString(),
-          p.expenseRatio.toString(),
-          p.finalCost.toString(),
-          p.averageProfitMargin.toString(),
-          p.recommendedPrice.toString(),
-          p.category,
-        ]),
-      ];
-
-      // Türkçe tablo programları için noktalı virgül (;) ayırıcısı kullanarak CSV oluşturuyoruz
-      final csvString = const ListToCsvConverter(fieldDelimiter: ';').convert(csvData);
-      
-      final result = await FilePicker.platform.saveFile(
-        dialogTitle: 'CSV Dosyasını Kaydet',
-        fileName: 'envanter_${DateTime.now().toString().split(' ')[0]}.csv',
-        type: FileType.custom,
-        allowedExtensions: ['csv'],
-      );
-
-      if (result != null) {
-        final file = File(result);
-        await file.writeAsString(csvString, encoding: utf8);
-        print('CSV dosyası kaydedildi: $result');
-        _showSuccess('Ürünler başarıyla dışa aktarıldı');
-      }
-    } catch (e) {
-      print('CSV dışa aktarma hatası: $e');
-      _showError('CSV dosyası dışa aktarılırken bir hata oluştu: $e');
-    }
-  }
-
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.error,
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (context) => InventoryProvider(widget.storageService)..initialize(),
+      child: Scaffold(
+        backgroundColor: AppConstants.backgroundColor,
+        appBar: _buildAppBar(),
+        body: _buildBody(),
+        floatingActionButton: _buildFloatingActionButton(),
       ),
     );
   }
 
-  void _showSuccess(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.success,
+  AppBar _buildAppBar() {
+    return AppBar(
+      title: const Text('Envanter Yönetimi'),
+      backgroundColor: AppConstants.primaryColor,
+      foregroundColor: Colors.white,
+      actions: [
+        Consumer<InventoryProvider>(
+          builder: (context, provider, child) {
+            return PopupMenuButton<String>(
+              onSelected: (value) => _handleMenuAction(value, provider),
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'add_product',
+                  child: Row(
+                    children: [
+                      Icon(Icons.add),
+                      SizedBox(width: 8),
+                      Text('Ürün Ekle'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'import_csv',
+                  child: Row(
+                    children: [
+                      Icon(Icons.file_upload),
+                      SizedBox(width: 8),
+                      Text('CSV İçe Aktar'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'export_csv',
+                  child: Row(
+                    children: [
+                      Icon(Icons.file_download),
+                      SizedBox(width: 8),
+                      Text('CSV Dışa Aktar'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'statistics',
+                  child: Row(
+                    children: [
+                      Icon(Icons.analytics),
+                      SizedBox(width: 8),
+                      Text('İstatistikler'),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBody() {
+    return Consumer<InventoryProvider>(
+      builder: (context, provider, child) {
+        if (provider.isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        return Column(
+          children: [
+            _buildSearchAndFilter(provider),
+            _buildStatisticsCard(provider),
+            Expanded(
+              child: _buildProductList(provider),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSearchAndFilter(InventoryProvider provider) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: Colors.white,
+      child: Column(
+        children: [
+          CustomTextField(
+            labelText: 'Ürün Ara...',
+            prefixIcon: Icons.search,
+            onChanged: provider.filterProducts,
+          ),
+          const SizedBox(height: 12),
+          ProductFilterWidget(
+            categories: provider.categories,
+            selectedCategory: provider.filterCategory,
+            onCategoryChanged: provider.setCategoryFilter,
+            sortBy: provider.sortBy,
+            sortAscending: provider.sortAscending,
+            onSortChanged: provider.setSorting,
+          ),
+        ],
       ),
     );
   }
 
-  void _showProductForm([Product? product]) {
-    showDialog(
+  Widget _buildStatisticsCard(InventoryProvider provider) {
+    final stats = provider.getInventoryStatistics();
+    final lowStockProducts = provider.getLowStockProducts();
+
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Envanter Özeti',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatItem('Toplam Ürün', '${stats['totalProducts']}'),
+              ),
+              Expanded(
+                child: _buildStatItem('Toplam Stok', '${stats['totalQuantity']}'),
+              ),
+              Expanded(
+                child: _buildStatItem('Toplam Değer', '${stats['totalValue'].toStringAsFixed(2)} TL'),
+              ),
+              Expanded(
+                child: _buildStatItem(
+                  'Düşük Stok',
+                  '${lowStockProducts.length}',
+                  color: lowStockProducts.isNotEmpty ? Colors.red : Colors.green,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem(String label, String value, {Color? color}) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: color ?? AppConstants.primaryColor,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.grey,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProductList(InventoryProvider provider) {
+    if (provider.filteredProducts.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.inventory_2, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text(
+              'Ürün bulunamadı',
+              style: TextStyle(fontSize: 18, color: Colors.grey),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ProductListWidget(
+      products: provider.filteredProducts,
+      scrollController: _scrollController,
+      onProductTap: (product) => _showProductDetails(product, provider),
+      onProductEdit: (product) => _showProductForm(product, provider),
+      onProductDelete: (product) => _confirmDeleteProduct(product, provider),
+    );
+  }
+
+  Widget _buildFloatingActionButton() {
+    return Consumer<InventoryProvider>(
+      builder: (context, provider, child) {
+        return FloatingActionButton(
+          onPressed: () => _showProductForm(null, provider),
+          backgroundColor: AppConstants.primaryColor,
+          child: const Icon(Icons.add, color: Colors.white),
+        );
+      },
+    );
+  }
+
+  void _handleMenuAction(String action, InventoryProvider provider) {
+    switch (action) {
+      case 'add_product':
+        _showProductForm(null, provider);
+        break;
+      case 'import_csv':
+        _importCSV(provider);
+        break;
+      case 'export_csv':
+        _exportCSV(provider);
+        break;
+      case 'statistics':
+        _showStatistics(provider);
+        break;
+    }
+  }
+
+  Future<void> _showProductForm(Product? product, InventoryProvider provider) async {
+    final result = await showDialog<Product>(
       context: context,
       builder: (context) => Dialog(
         child: ProductFormWidget(
           product: product,
-          onSubmit: (updatedProduct) async {
-            try {
-              if (product == null) {
-                await widget.storageService.addProduct(updatedProduct);
-                _showSuccess('Ürün başarıyla eklendi');
-              } else {
-                await widget.storageService.updateProduct(updatedProduct);
-                _showSuccess('Ürün başarıyla güncellendi');
-              }
-              _loadProducts();
-            } catch (e) {
-              _showError('Ürün kaydedilirken bir hata oluştu: $e');
-            }
-                          },
-                        ),
-                      ),
+          onSave: (newProduct) => Navigator.of(context).pop(newProduct),
+          generateBarcode: provider.generateBarcode,
+          validateBarcode: provider.isValidBarcode,
+        ),
+      ),
+    );
+
+    if (result != null) {
+      try {
+        if (product == null) {
+          await provider.addProduct(result);
+          _showSuccess('Ürün başarıyla eklendi');
+        } else {
+          await provider.updateProduct(result);
+          _showSuccess('Ürün başarıyla güncellendi');
+        }
+      } catch (e) {
+        _showError('İşlem başarısız: $e');
+      }
+    }
+  }
+
+  Future<void> _importCSV(InventoryProvider provider) async {
+    try {
+      final csvData = await CSVExportUtil.importProductsFromCSV();
+      if (csvData != null) {
+        await provider.importProductsFromCSV(csvData);
+        _showSuccess('CSV dosyası başarıyla içe aktarıldı');
+      }
+    } catch (e) {
+      _showError('CSV içe aktarma başarısız: $e');
+    }
+  }
+
+  Future<void> _exportCSV(InventoryProvider provider) async {
+    try {
+      final csvData = provider.exportProductsToCSV();
+      await CSVExportUtil.exportProductsToCSV(csvData);
+      _showSuccess('CSV dosyası başarıyla dışa aktarıldı');
+    } catch (e) {
+      _showError('CSV dışa aktarma başarısız: $e');
+    }
+  }
+
+  void _showProductDetails(Product product, InventoryProvider provider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(product.name),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildDetailRow('Marka', product.brand),
+              _buildDetailRow('Model', product.model),
+              _buildDetailRow('Renk', product.color),
+              _buildDetailRow('Beden', product.size),
+              _buildDetailRow('Kategori', product.category),
+              _buildDetailRow('Bölge', product.region),
+              _buildDetailRow('Stok', '${product.quantity}'),
+              _buildDetailRow('Fiyat', '${product.finalCost.toStringAsFixed(2)} TL'),
+              if (product.barcode?.isNotEmpty == true)
+                _buildDetailRow('Barkod', product.barcode!),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Kapat'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _showProductForm(product, provider);
+            },
+            child: const Text('Düzenle'),
+          ),
+        ],
+      ),
     );
   }
 
-  void _showDeleteConfirmation(Product product) {
-    showDialog(
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              '$label:',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmDeleteProduct(Product product, InventoryProvider provider) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Ürünü Sil'),
         content: Text('${product.name} ürününü silmek istediğinizden emin misiniz?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.of(context).pop(false),
             child: const Text('İptal'),
           ),
-          TextButton(
-            onPressed: () async {
-              try {
-                await widget.storageService.deleteProduct(product.id);
-                _showSuccess('Ürün başarıyla silindi');
-                _loadProducts();
-                Navigator.pop(context);
-              } catch (e) {
-                _showError('Ürün silinirken bir hata oluştu: $e');
-              }
-            },
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await provider.deleteProduct(product.id!);
+        _showSuccess('Ürün başarıyla silindi');
+      } catch (e) {
+        _showError('Ürün silinirken hata oluştu: $e');
+      }
+    }
+  }
+
+  void _showStatistics(InventoryProvider provider) {
+    final stats = provider.getInventoryStatistics();
+    final lowStock = provider.getLowStockProducts();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Envanter İstatistikleri'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildDetailRow('Toplam Ürün Sayısı', '${stats['totalProducts']}'),
+              _buildDetailRow('Toplam Stok Miktarı', '${stats['totalQuantity']}'),
+              _buildDetailRow('Toplam Envanter Değeri', '${stats['totalValue'].toStringAsFixed(2)} TL'),
+              _buildDetailRow('Ortalama Ürün Değeri', '${stats['averageValue'].toStringAsFixed(2)} TL'),
+              _buildDetailRow('Düşük Stoklu Ürün Sayısı', '${lowStock.length}'),
+              if (lowStock.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('Düşük Stoklu Ürünler:', style: TextStyle(fontWeight: FontWeight.bold)),
+                ...lowStock.take(5).map((product) => Text('• ${product.name} (${product.quantity})')),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Kapat'),
           ),
         ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(AppStrings.inventory),
-        backgroundColor: AppColors.primary,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.file_upload),
-            onPressed: _importFromCSV,
-            tooltip: 'CSV İçe Aktar',
-          ),
-          IconButton(
-            icon: const Icon(Icons.file_download),
-            onPressed: _exportToCSV,
-            tooltip: 'CSV Dışa Aktar',
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-        children: [
-                ProductFilterWidget(
-                  searchQuery: _searchQuery,
-                  sortBy: _sortBy,
-                  sortAscending: _sortAscending,
-                  filterCategory: _filterCategory,
-                  categories: _categories,
-                  onSearchChanged: _filterProducts,
-                  onSortChanged: (value) {
-                                setState(() {
-                                  _sortBy = value;
-                                  _sortProducts();
-                                });
-                  },
-                  onSortDirectionChanged: (value) {
-                        setState(() {
-                      _sortAscending = value;
-                          _sortProducts();
-                        });
-                      },
-                  onCategoryChanged: (value) {
-                                  setState(() {
-                      _filterCategory = value;
-                      _applyFilters();
-                                  });
-                                },
-                              ),
-                Expanded(
-                  child: ProductListWidget(
-                    products: _filteredProducts,
-                    scrollController: _scrollController,
-                    onProductTap: _showProductForm,
-                    onProductLongPress: _showDeleteConfirmation,
-                      ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showProductForm(),
-        backgroundColor: AppColors.primary,
-        icon: const Icon(Icons.add),
-        label: Text('Yeni Ürün'),
-      ),
+  void _showSuccess(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.green),
+    );
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
     );
   }
 } 

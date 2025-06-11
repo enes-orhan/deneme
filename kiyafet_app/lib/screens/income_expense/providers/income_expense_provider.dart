@@ -1,0 +1,287 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import '../../../models/income_expense_entry.dart';
+import '../../../models/credit_entry.dart';
+import '../../../models/product.dart';
+import '../../../services/storage_service.dart';
+import '../../../utils/logger.dart';
+
+/// Provider for income expense details page business logic and state management
+class IncomeExpenseProvider with ChangeNotifier {
+  final StorageService _storageService;
+  final EntryType _entryType;
+
+  IncomeExpenseProvider(this._storageService, this._entryType);
+
+  // State variables
+  List<IncomeExpenseEntry> _allEntries = [];
+  List<CreditEntry> _creditEntries = [];
+  List<Product> _products = [];
+  bool _isLoading = false;
+  String _searchQuery = '';
+  DateTime? _startDate;
+  DateTime? _endDate;
+
+  // Getters
+  List<IncomeExpenseEntry> get allEntries => _allEntries;
+  List<CreditEntry> get creditEntries => _creditEntries;
+  List<Product> get products => _products;
+  bool get isLoading => _isLoading;
+  String get searchQuery => _searchQuery;
+  DateTime? get startDate => _startDate;
+  DateTime? get endDate => _endDate;
+  EntryType get entryType => _entryType;
+
+  /// Initialize the provider and load data
+  Future<void> initialize() async {
+    await loadData();
+  }
+
+  /// Load all relevant data based on entry type
+  Future<void> loadData() async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      await _loadEntries();
+
+      if (_entryType == EntryType.mevcut) {
+        await _loadSpecialData();
+      }
+
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      Logger.error('Failed to load income expense data', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      _isLoading = false;
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Load income/expense entries
+  Future<void> _loadEntries() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final entriesJson = prefs.getStringList('income_expense_entries') ?? [];
+      final allEntries = entriesJson.map((e) => IncomeExpenseEntry.fromMap(jsonDecode(e))).toList();
+      
+      // Filter entries by type
+      _allEntries = allEntries.where((e) => e.type == _entryType.name).toList();
+      
+      Logger.info('Loaded ${_allEntries.length} entries for type ${_entryType.name}', 
+                  tag: 'INCOME_EXPENSE_PROVIDER');
+    } catch (e) {
+      Logger.error('Failed to load entries', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      _allEntries = [];
+    }
+  }
+
+  /// Load special data for 'mevcut' type (credit entries and products)
+  Future<void> _loadSpecialData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Load credit entries
+      final creditData = prefs.getStringList('credit_entries') ?? [];
+      _creditEntries = creditData.map((e) => CreditEntry.fromMap(jsonDecode(e))).toList();
+      
+      // Load products
+      final productsJson = prefs.getStringList('products') ?? [];
+      _products = productsJson.map((e) => Product.fromMap(jsonDecode(e))).toList();
+
+      Logger.info('Loaded ${_creditEntries.length} credit entries and ${_products.length} products', 
+                  tag: 'INCOME_EXPENSE_PROVIDER');
+    } catch (e) {
+      Logger.error('Failed to load special data', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      _creditEntries = [];
+      _products = [];
+    }
+  }
+
+  /// Filter entries by category
+  List<IncomeExpenseEntry> filterByCategory(String category) {
+    return _allEntries.where((e) => e.category == category && _searchMatch(e)).toList();
+  }
+
+  /// Check if entry matches search query
+  bool _searchMatch(IncomeExpenseEntry e) {
+    if (_searchQuery.isEmpty) return true;
+    return e.description.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+           e.category.toLowerCase().contains(_searchQuery.toLowerCase());
+  }
+
+  /// Get total amount for a specific category
+  double totalForCategory(String category) {
+    return _allEntries.where((e) => e.category == category).fold(0.0, (sum, e) => sum + e.amount);
+  }
+
+  /// Update search query
+  void updateSearchQuery(String query) {
+    _searchQuery = query;
+    notifyListeners();
+  }
+
+  /// Set date range filter
+  void setDateRange(DateTime? start, DateTime? end) {
+    _startDate = start;
+    _endDate = end;
+    notifyListeners();
+  }
+
+  /// Add new entry
+  Future<void> addEntry({
+    required String category,
+    required String description,
+    required double amount,
+    required DateTime date,
+  }) async {
+    try {
+      final newEntry = IncomeExpenseEntry(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        type: _entryType.name,
+        category: category,
+        description: description,
+        amount: amount,
+        date: date,
+        isAutoGenerated: false,
+      );
+
+      _allEntries.add(newEntry);
+      await _saveEntries();
+      notifyListeners();
+
+      Logger.info('Added new entry: $description', tag: 'INCOME_EXPENSE_PROVIDER');
+    } catch (e) {
+      Logger.error('Failed to add entry', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      rethrow;
+    }
+  }
+
+  /// Update existing entry
+  Future<void> updateEntry(IncomeExpenseEntry updatedEntry) async {
+    try {
+      final index = _allEntries.indexWhere((e) => e.id == updatedEntry.id);
+      if (index != -1) {
+        _allEntries[index] = updatedEntry;
+        await _saveEntries();
+        notifyListeners();
+
+        Logger.info('Updated entry: ${updatedEntry.description}', tag: 'INCOME_EXPENSE_PROVIDER');
+      }
+    } catch (e) {
+      Logger.error('Failed to update entry', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      rethrow;
+    }
+  }
+
+  /// Delete entry
+  Future<void> deleteEntry(String entryId) async {
+    try {
+      _allEntries.removeWhere((e) => e.id == entryId);
+      await _saveEntries();
+      notifyListeners();
+
+      Logger.info('Deleted entry: $entryId', tag: 'INCOME_EXPENSE_PROVIDER');
+    } catch (e) {
+      Logger.error('Failed to delete entry', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      rethrow;
+    }
+  }
+
+  /// Save entries to storage
+  Future<void> _saveEntries() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Load all entries
+      final entriesJson = prefs.getStringList('income_expense_entries') ?? [];
+      final allEntries = entriesJson.map((e) => IncomeExpenseEntry.fromMap(jsonDecode(e))).toList();
+      
+      // Remove entries of current type
+      allEntries.removeWhere((e) => e.type == _entryType.name);
+      
+      // Add current entries
+      allEntries.addAll(_allEntries);
+      
+      // Save back to storage
+      final updatedJson = allEntries.map((e) => jsonEncode(e.toMap())).toList();
+      await prefs.setStringList('income_expense_entries', updatedJson);
+    } catch (e) {
+      Logger.error('Failed to save entries', tag: 'INCOME_EXPENSE_PROVIDER', error: e);
+      rethrow;
+    }
+  }
+
+  /// Get total credit amount
+  double get totalCreditAmount {
+    // Note: Using remainingDebt instead of remainingAmount based on credit entry model
+    return _creditEntries.fold(0.0, (sum, entry) => sum + entry.remainingDebt);
+  }
+
+  /// Get total stock value
+  double get totalStockValue {
+    return _products.fold(0.0, (sum, product) => sum + (product.finalCost * product.quantity));
+  }
+
+  /// Export entries to CSV
+  Future<List<IncomeExpenseEntry>> getEntriesForExport({
+    DateTime? fromDate,
+    DateTime? toDate,
+  }) async {
+    var entries = _allEntries;
+    
+    if (fromDate != null) {
+      entries = entries.where((e) => e.date.isAfter(fromDate) || e.date.isAtSameMomentAs(fromDate)).toList();
+    }
+    
+    if (toDate != null) {
+      entries = entries.where((e) => e.date.isBefore(toDate) || e.date.isAtSameMomentAs(toDate)).toList();
+    }
+    
+    return entries;
+  }
+
+  /// Get categories for current entry type
+  List<String> get availableCategories {
+    switch (_entryType) {
+      case EntryType.gelir:
+        return [
+          'sabit_gelir',
+          'gunluk_gelir',
+        ];
+      case EntryType.gider:
+        return [
+          'sabit_gider',
+          'gunluk_gider',
+        ];
+      case EntryType.mevcut:
+        return [
+          'nakit',
+        ];
+      case EntryType.borc:
+        return [
+          'banka_borcu',
+          'toptanci_borcu',
+          'tl_borcu',
+          'doviz_borcu',
+          'emtia_borcu',
+        ];
+    }
+  }
+
+  /// Get title for current entry type
+  String get pageTitle {
+    switch (_entryType) {
+      case EntryType.gelir:
+        return 'Gelir Detayları';
+      case EntryType.gider:
+        return 'Gider Detayları';
+      case EntryType.mevcut:
+        return 'Mevcut Detayları';
+      case EntryType.borc:
+        return 'Borç Detayları';
+    }
+  }
+} 
