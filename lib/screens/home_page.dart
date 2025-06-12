@@ -7,7 +7,7 @@ import '../models/income_expense_entry.dart';
 import '../utils/logger.dart';
 import '../widgets/custom_button.dart';
 import 'inventory_page.dart';
-import 'daily_sales/daily_sales_page.dart';
+import 'daily_sales_landing_page.dart';
 import 'credit_book_page.dart';
 import 'income_expense_page.dart';
 import 'login_page.dart';
@@ -189,7 +189,7 @@ class HomePage extends StatelessWidget {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => const DailySalesPage(),
+                              builder: (context) => const DailySalesLandingPage(),
                             ),
                           );
                         },

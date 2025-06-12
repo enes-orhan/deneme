@@ -13,7 +13,7 @@ class DatabaseConnection {
 
   static Database? _database;
   static const String _dbName = 'kiyafet_app.db';
-  static const int _dbVersion = 5;
+  static const int _dbVersion = 6;
   static String? _dbPath;
 
   /// Get the singleton database instance
@@ -380,6 +380,17 @@ class DatabaseConnection {
       await db.execute('CREATE INDEX idx_sales_timestamp ON sales(timestamp)');
       
       Logger.info('Database upgraded to version 5: sales table optimized, redundant date column removed', tag: 'DB_CONNECTION');
+    }
+
+    if (oldVersion < 6) {
+      // Add payment method columns to daily_sessions table
+      Logger.info('Adding payment method columns to daily_sessions table', tag: 'DB_CONNECTION');
+      
+      await db.execute('ALTER TABLE daily_sessions ADD COLUMN cash_amount REAL DEFAULT 0.0');
+      await db.execute('ALTER TABLE daily_sessions ADD COLUMN credit_card_amount REAL DEFAULT 0.0');
+      await db.execute('ALTER TABLE daily_sessions ADD COLUMN pazar_amount REAL DEFAULT 0.0');
+      
+      Logger.info('Database upgraded to version 6 with payment method tracking', tag: 'DB_CONNECTION');
     }
   }
 

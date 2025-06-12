@@ -119,6 +119,47 @@ class DailySessionRepository {
     }
   }
 
+  /// End a session for today with payment method breakdown
+  Future<DailySession> endSessionWithPayments({
+    double? totalRevenue,
+    double? totalCost,
+    double? totalProfit,
+    int? totalSales,
+    double cashAmount = 0.0,
+    double creditCardAmount = 0.0,
+    double pazarAmount = 0.0,
+  }) async {
+    try {
+      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final session = await getSessionByDate(today);
+      
+      if (!session.sessionStarted) {
+        Logger.warn('Session not started for today', tag: 'DAILY_SESSION_REPO');
+        return session;
+      }
+
+      final updatedSession = session.copyWith(
+        sessionStarted: false,
+        endTime: DateTime.now(),
+        totalRevenue: totalRevenue ?? session.totalRevenue,
+        totalCost: totalCost ?? session.totalCost,
+        totalProfit: totalProfit ?? session.totalProfit,
+        totalSales: totalSales ?? session.totalSales,
+        cashAmount: cashAmount,
+        creditCardAmount: creditCardAmount,
+        pazarAmount: pazarAmount,
+        updatedAt: DateTime.now(),
+      );
+
+      await _update(updatedSession);
+      Logger.info('Session ended with payment breakdown - Cash: $cashAmount, Card: $creditCardAmount, Pazar: $pazarAmount', tag: 'DAILY_SESSION_REPO');
+      return updatedSession;
+    } catch (e) {
+      Logger.error('Failed to end session with payments', tag: 'DAILY_SESSION_REPO', error: e);
+      throw Exception('Failed to end session with payments: $e');
+    }
+  }
+
   /// Update session totals during the day
   Future<DailySession> updateSessionTotals(String date, {
     double? totalRevenue,

@@ -10,6 +10,7 @@ import 'providers/daily_sales_provider.dart';
 import 'components/sales_summary_widget.dart';
 import 'components/barcode_scanner_widget.dart';
 import 'components/day_management_widget.dart';
+import 'components/payment_collection_dialog.dart';
 import '../../utils/csv_export_util.dart';
 
 /// Refactored daily sales page with modular components
@@ -387,8 +388,20 @@ class _DailySalesPageState extends State<DailySalesPage> with SingleTickerProvid
     try {
       final confirmed = await DayManagementWidget.showEndDayConfirmation(context);
       if (confirmed) {
-        await _provider.endDay();
-        _showSuccess('Gün başarıyla bitirildi');
+        // Show payment collection dialog
+        final paymentData = await PaymentCollectionDialog.show(
+          context,
+          totalRevenue: _provider.totalAmount,
+        );
+        
+        if (paymentData != null) {
+          await _provider.endDayWithPayments(
+            cashAmount: paymentData['cash'] ?? 0.0,
+            creditCardAmount: paymentData['creditCard'] ?? 0.0,
+            pazarAmount: paymentData['pazar'] ?? 0.0,
+          );
+          _showSuccess('Gün başarıyla bitirildi ve ödeme verileri kaydedildi');
+        }
       }
     } catch (e) {
       _showError('Gün bitirilirken hata oluştu: $e');
